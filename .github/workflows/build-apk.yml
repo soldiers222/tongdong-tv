@@ -1,0 +1,87 @@
+# 构建电视版 APK：网页（web/）打包进安卓外壳（android/），
+# 发布到 Releases 的固定地址：
+#   https://github.com/soldiers222/tongdong-tv/releases/latest/download/tongdong-tv.apk
+name: 电视版 APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'android/**'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: 构建
+        working-directory: android
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --stacktrace --console=plain > build.log 2>&1
+          code=$?
+          tail -n 60 build.log
+          if [ $code -ne 0 ]; then
+            # 把关键错误写成注解，在 Actions 页面和 API 里都能直接看到
+            msg=$(grep -E -A4 "error:|What went wrong|Could not|Exception:" build.log | head -60 | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n/%0A/g')
+            echo "::error title=构建失败::${msg}"
+            exit $code
+          fi
+
+      - name: 整理文件
+        id: out
+        run: |
+          V=$(sed -n "s/.*VERSION = '\([^']*\)'.*/\1/p" web/js/version.js)
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk "dist/tongdong-tv-${V}-build${GITHUB_RUN_NUMBER}.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/tongdong-tv.apk
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tongdong-tv-apk
+          path: dist/tongdong-tv-*.apk
+
+      - name: 发布到 Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.out.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          童动乐园电视版 ${V}（第 ${GITHUB_RUN_NUMBER} 次构建，代码 ${GITHUB_SHA::7}）
+
+          **装到电视上**
+          1. 下载 \`tongdong-tv.apk\`，拷到 U 盘根目录
+          2. U 盘插到电视，用电视的「文件管理」打开这个文件安装（第一次要在设置里允许安装外部来源应用）
+          3. 以后有新版本，同样方法覆盖安装，运动记录不会丢
+
+          两个文件内容一样，带版本号的那个方便区分。
+          EOF
+          gh release delete tv-latest --yes --cleanup-tag || true
+          gh release create tv-latest dist/*.apk \
+            --target "$GITHUB_SHA" \
+            --title "电视版 ${V}（第 ${GITHUB_RUN_NUMBER} 次构建）" \
+            --notes-file notes.md \
+            --latest

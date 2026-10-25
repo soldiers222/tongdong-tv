@@ -1,0 +1,67 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 版本号跟网页一致：读 web/js/version.js 里的 VERSION
+def webDir = rootProject.file('../web')
+def webVersion = {
+    def f = new File(webDir, 'js/version.js')
+    def m = f.exists() ? (f.getText('UTF-8') =~ /VERSION\s*=\s*'([^']+)'/) : null
+    return (m != null && m.find()) ? m.group(1) : '0.0.0'
+}()
+
+// 网页文件复制到 build/generated/webassets/www，打进 APK 的 assets/www
+def webAssetsRoot = layout.buildDirectory.dir('generated/webassets').get().asFile
+def syncWebAssets = tasks.register('syncWebAssets', Sync) {
+    from webDir
+    into new File(webAssetsRoot, 'www')
+    exclude '**/.DS_Store', 'package.json'
+}
+
+android {
+    namespace 'com.family.tongdong'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.family.tongdong'
+        minSdk 24
+        targetSdk 34
+        versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger())
+        versionName webVersion
+    }
+
+    // 固定的调试证书（仓库里的 debug.keystore，密码是安卓惯例的 android）。
+    // 每次构建签名一致，电视上可以直接覆盖安装，运动记录不会丢。不要换掉它。
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    sourceSets {
+        main {
+            assets.srcDir webAssetsRoot
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.named('preBuild') { dependsOn syncWebAssets }
+tasks.matching { it.name ==~ /(merge|package|compress).*Assets/ }.configureEach { dependsOn syncWebAssets }

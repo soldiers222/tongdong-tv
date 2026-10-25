@@ -1,0 +1,10 @@
+node_modules/
+tests/out/
+# 完整字体 8MB，只在重新裁剪子集时需要（见 tools/build-font.py）
+tools/fonts/*.ttf
+tools/fonts/*.otf
+# 证书不进仓库，只有电视版固定的调试证书例外
+*.keystore
+*.jks
+!android/app/debug.keystore
+.DS_Store

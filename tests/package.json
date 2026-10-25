@@ -1,0 +1,15 @@
+{
+  "name": "tongdong-tests",
+  "private": true,
+  "type": "module",
+  "description": "童动乐园自动化测试：单元测试 + 无头 Chrome 端到端测试",
+  "scripts": {
+    "unit": "node --test unit/*.test.mjs",
+    "syntax": "node syntax-check.mjs",
+    "e2e": "node e2e.mjs"
+  },
+  "devDependencies": {
+    "acorn": "^8.14.0",
+    "puppeteer-core": "^24.0.0"
+  }
+}

@@ -1,0 +1,60 @@
+# 网页版自动发布到 GitHub Pages：
+#   https://soldiers222.github.io/tongdong-tv/
+# 手机打开它可以走「路线 B」（手机当摄像头，投屏到电视），也方便在电脑上看效果。
+#
+# 第一次需要在仓库 Settings → Pages 里把 Source 选成「GitHub Actions」，
+# 然后在 Actions → 网页版 → Run workflow 手动跑一次。没开启时这个流程只提示、不报错。
+name: 网页版
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/deploy-web.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.pages.outputs.enabled }}
+    steps:
+      - name: 检查 Pages 是否已开启
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/pages" --jq .build_type > build_type.txt 2>/dev/null; then
+            echo "Pages 已开启：$(cat build_type.txt)"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=网页版还没发布::到仓库 Settings → Pages，把 Source 选成 GitHub Actions，再到 Actions → 网页版 → Run workflow 运行一次。"
+          fi
+
+  deploy:
+    needs: check
+    if: needs.check.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: deployment
+        uses: actions/deploy-pages@v4

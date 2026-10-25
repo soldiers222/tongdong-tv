@@ -1,0 +1,4 @@
+// 童动乐园电视外壳。网页在仓库根目录的 web/，构建时自动复制进 APK。
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

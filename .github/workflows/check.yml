@@ -1,0 +1,46 @@
+# 每次推送自动检查：语法兼容（老电视浏览器）、单元测试、无头 Chrome 端到端测试（模拟骨架，不需要摄像头）
+name: 自动检查
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装测试工具
+        working-directory: tests
+        run: npm ci
+
+      - name: 语法兼容（只用 ES2017）
+        run: node tests/syntax-check.mjs
+
+      - name: 单元测试
+        run: node --test tests/unit/*.test.mjs
+
+      - name: 端到端测试
+        env:
+          CHROME: /usr/bin/google-chrome
+          E2E_OUT: tests/out
+        run: node tests/e2e.mjs
+
+      - name: 保存截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: tests/out
+          if-no-files-found: ignore

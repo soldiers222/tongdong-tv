@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#B5443A">
+<title>童动乐园</title>
+<link rel="preload" href="fonts/display.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="on-home">
+<div id="app">
+
+  <section id="screen-home" class="screen" aria-label="首页">
+    <header class="home-head">
+      <h1 class="wordmark">童动乐园</h1>
+      <p class="home-hint">遥控器上下键选择，按确定开始</p>
+    </header>
+    <div class="lanes">
+      <button class="lane focusable" data-go="fruit" id="lane-fruit">
+        <span class="lane-icon" aria-hidden="true">
+          <svg viewBox="0 0 120 120">
+            <path d="M8 46 A52 52 0 0 0 112 46 Z" fill="#2E7D4F" stroke="#13213C" stroke-width="4" stroke-linejoin="round"/>
+            <path d="M17 46 A43 43 0 0 0 103 46 Z" fill="#F7F5EF"/>
+            <path d="M23 46 A37 37 0 0 0 97 46 Z" fill="#E8414B"/>
+            <g fill="#13213C">
+              <ellipse cx="42" cy="58" rx="3.2" ry="5" transform="rotate(-20 42 58)"/>
+              <ellipse cx="60" cy="64" rx="3.2" ry="5"/>
+              <ellipse cx="78" cy="58" rx="3.2" ry="5" transform="rotate(20 78 58)"/>
+              <ellipse cx="51" cy="74" rx="3" ry="4.6" transform="rotate(-10 51 74)"/>
+              <ellipse cx="69" cy="74" rx="3" ry="4.6" transform="rotate(10 69 74)"/>
+            </g>
+          </svg>
+        </span>
+        <span class="lane-text">
+          <span class="lane-title">西瓜切切切</span>
+          <span class="lane-desc">挥手切水果，练反应和手眼协调</span>
+        </span>
+        <span class="lane-record" id="rec-fruit"><b>0</b>最好成绩</span>
+      </button>
+      <button class="lane focusable" data-go="balance" id="lane-balance" data-nav-down="tool-day0">
+        <span class="lane-icon" aria-hidden="true">
+          <svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="60" cy="18" r="10"/>
+            <path d="M60 30 L60 66"/>
+            <path d="M60 40 L32 30 M60 40 L88 30"/>
+            <path d="M60 66 L57 110 M50 110 L64 110"/>
+            <path d="M60 66 L84 70 L80 94"/>
+          </svg>
+        </span>
+        <span class="lane-text">
+          <span class="lane-title">金鸡独立</span>
+          <span class="lane-desc">单脚站稳，比比哪条腿站得久</span>
+        </span>
+        <span class="lane-record" id="rec-balance"><b>0 秒</b>站得最久</span>
+      </button>
+      <div class="lane-tools">
+        <button class="tool focusable" data-go="day0" id="tool-day0" data-nav-up="lane-balance">
+          <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="6" y="16" width="52" height="38" rx="8"/>
+            <circle cx="32" cy="35" r="11"/>
+            <path d="M22 16 L26 8 L38 8 L42 16"/>
+          </svg>设备测试<span class="badge" id="badge-day0">先测这个</span>
+        </button>
+        <button class="tool focusable" data-go="records" data-nav-up="lane-balance">
+          <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" aria-hidden="true">
+            <path d="M10 56 L54 56"/>
+            <path d="M18 48 L18 32 M32 48 L32 14 M46 48 L46 24"/>
+          </svg>运动记录
+        </button>
+        <button class="tool focusable" data-go="settings" data-nav-up="lane-balance">
+          <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" aria-hidden="true">
+            <path d="M10 18 L54 18 M10 32 L54 32 M10 46 L54 46"/>
+            <circle cx="40" cy="18" r="6" fill="currentColor"/>
+            <circle cx="22" cy="32" r="6" fill="currentColor"/>
+            <circle cx="36" cy="46" r="6" fill="currentColor"/>
+          </svg>家长设置
+        </button>
+      </div>
+    </div>
+    <footer class="infield">
+      <p class="stat">今天运动了<b id="stat-today">0</b>分钟</p>
+      <p class="stat">这周有<b id="stat-week">0</b>天在运动</p>
+    </footer>
+  </section>
+
+  <section id="screen-day0" class="screen page" aria-label="设备测试">
+    <header class="page-head">
+      <h1 class="page-title">设备测试</h1>
+      <div class="btn-row"><button class="btn focusable" data-back>返回首页</button></div>
+    </header>
+    <div class="d0-preview"><canvas id="d0-canvas" width="960" height="540"></canvas></div>
+    <div class="d0-live">
+      <span class="fit" id="d0-fit">站到电视前 2 到 3 米，让全身出现在画面里</span><br>
+      <span id="d0-livefps"></span>
+    </div>
+    <div class="d0-side">
+      <ul class="checks">
+        <li><span class="k">运行环境</span><span class="v" id="d0-env">检测中</span></li>
+        <li><span class="k">设备</span><span class="v" id="d0-dev">检测中</span></li>
+        <li><span class="k">摄像头</span><span class="v" id="d0-cam">正在打开</span></li>
+      </ul>
+      <table class="bench">
+        <thead><tr><th class="c-name">识别引擎</th><th class="c-fps">识别帧率</th><th class="c-lat">单帧耗时</th><th class="c-ren">画面帧率</th></tr></thead>
+        <tbody id="d0-bench"></tbody>
+      </table>
+      <div class="verdict" id="d0-verdict"></div>
+    </div>
+    <div class="d0-actions btn-row">
+      <button class="btn primary focusable" id="d0-run">开始测速</button>
+      <button class="btn focusable" id="d0-summary-btn">结果摘要</button>
+    </div>
+    <pre class="summary" id="d0-summary"></pre>
+  </section>
+
+  <section id="screen-play" class="screen" aria-label="运动">
+    <canvas id="stage"></canvas>
+    <div class="result" id="result"></div>
+  </section>
+
+  <section id="screen-records" class="screen page" aria-label="运动记录">
+    <header class="page-head">
+      <h1 class="page-title">运动记录</h1>
+      <div class="btn-row"><button class="btn focusable" data-back>返回首页</button></div>
+    </header>
+    <div class="rec-wrap">
+      <div class="rec-col">
+        <h3>最近 7 天运动时间</h3>
+        <ul class="bars" id="rec-bars"></ul>
+      </div>
+      <div class="rec-col">
+        <h3>最好成绩</h3>
+        <ul class="bests" id="rec-bests"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="screen-settings" class="screen page" aria-label="家长设置">
+    <header class="page-head">
+      <h1 class="page-title">家长设置</h1>
+      <div class="btn-row"><button class="btn focusable" data-back>返回首页</button></div>
+    </header>
+    <div class="set-list" id="set-list"></div>
+    <p class="set-note" id="set-note">选中一项后按左右键修改。所有记录只保存在这台设备上，不会上传。</p>
+  </section>
+
+  <div class="loading" id="loading">
+    <div class="t" id="loading-t">准备中</div>
+    <div class="s" id="loading-s"></div>
+    <div class="btn-row" id="loading-btns"></div>
+  </div>
+
+  <div class="rest" id="rest">
+    <h2>休息一下</h2>
+    <p id="rest-p">已经运动 15 分钟了。看看窗外远处，喝口水。</p>
+    <div class="count" id="rest-count">60</div>
+    <div class="btn-row" id="rest-btns"></div>
+  </div>
+
+  <div id="toast"></div>
+</div>
+<video id="cam" muted playsinline autoplay></video>
+<script type="module" src="js/main.js"></script>
+<script nomodule>
+  document.body.innerHTML = '<p style="font-size:32px;padding:60px;color:#fff;font-family:sans-serif">这个浏览器版本太旧，打不开童动乐园。请用电视版 APK，或换一个新版浏览器。</p>';
+</script>
+</body>
+</html>

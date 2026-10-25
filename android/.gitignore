@@ -1,0 +1,10 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+captures/
+# 只提交固定的调试证书 app/debug.keystore，其他证书不进仓库
+*.keystore
+*.jks
+!app/debug.keystore
