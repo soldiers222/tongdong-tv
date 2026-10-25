@@ -163,10 +163,10 @@ try {
     const page = await open('/?screen=day0&bench=fast');
     check('设备测试打开摄像头', await waitFor(page, () => /×/.test(document.getElementById('d0-cam').textContent), 15000));
     await page.click('#d0-run');
-    const ok = await waitFor(page, () => !window.TD.day0.debug().benching && window.TD.day0.debug().results.length === 5, 280000);
+    const ok = await waitFor(page, () => !window.TD.day0.debug().benching && window.TD.day0.debug().results.length === 6, 330000);
     const dbg = await page.evaluate(() => window.TD.day0.debug());
-    check('五个引擎都测完', ok, dbg.results.map((r) => r.id + (r.error ? '（' + r.error + '）' : ' ' + r.fps.toFixed(1) + 'fps/' + r.kpAvg.toFixed(1) + '点')).join('；'));
-    for (const id of ['mn-worker', 'mp-lite', 'mn-webgl', 'mn-wasm']) {
+    check('六个引擎都测完', ok, dbg.results.map((r) => r.id + (r.error ? '（' + r.error + '）' : ' ' + r.fps.toFixed(1) + 'fps/' + r.kpAvg.toFixed(1) + '点')).join('；'));
+    for (const id of ['mn-worker-gl', 'mn-worker', 'mp-lite', 'mn-webgl', 'mn-wasm']) {
       const r = dbg.results.find((x) => x.id === id);
       check(id + ' 识别到人体', r && !r.error && r.fps > 0 && r.kpAvg >= 8, r ? (r.error || r.kpAvg.toFixed(1) + ' 个关键点') : '无结果');
     }

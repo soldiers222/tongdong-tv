@@ -8,8 +8,11 @@ import { MOCK_SCRIPTS } from './mock.js';
 // 网站根目录（index.html 所在目录）。不用 import.meta，兼容更老的 WebView
 export var BASE = new URL('.', document.baseURI || location.href).href;
 
+// 后台线程的引擎在 Worker 里识别，主线程只管画面，游戏更流畅；
+// 主线程的引擎识别时会卡住画面（慢设备上画面帧率≈识别帧率）。
 export var ENGINES = [
-  { id: 'mn-worker', label: 'MoveNet 闪电（后台线程）', points: 17, kind: 'movenet-worker' },
+  { id: 'mn-worker-gl', label: 'MoveNet 闪电（后台 GPU）', points: 17, kind: 'movenet-worker', backend: 'webgl' },
+  { id: 'mn-worker', label: 'MoveNet 闪电（后台 CPU）', points: 17, kind: 'movenet-worker', backend: 'wasm' },
   { id: 'mp-lite', label: 'MediaPipe 精简', points: 33, kind: 'mediapipe', complexity: 0 },
   { id: 'mn-webgl', label: 'MoveNet 闪电（GPU）', points: 17, kind: 'movenet', backend: 'webgl' },
   { id: 'mn-wasm', label: 'MoveNet 闪电（CPU）', points: 17, kind: 'movenet', backend: 'wasm' },
@@ -31,6 +34,17 @@ function hasWebGL() {
   return glCache;
 }
 
+// 后台线程能不能用 GPU：OffscreenCanvas 要能拿到 WebGL
+var offGlCache = null;
+function hasOffscreenWebGL() {
+  if (offGlCache !== null) return offGlCache;
+  try {
+    var c = new OffscreenCanvas(1, 1);
+    offGlCache = !!(c.getContext('webgl2') || c.getContext('webgl'));
+  } catch (e) { offGlCache = false; }
+  return offGlCache;
+}
+
 // 返回 null 表示可以用；否则返回不能用的原因
 export function unsupportedReason(id) {
   var info = engineInfo(id);
@@ -43,6 +57,7 @@ export function unsupportedReason(id) {
     if (typeof Worker !== 'function') return '不支持后台线程';
     if (typeof createImageBitmap !== 'function') return '不支持 createImageBitmap';
     if (typeof OffscreenCanvas !== 'function') return '不支持 OffscreenCanvas';
+    if (info.backend === 'webgl' && !hasOffscreenWebGL()) return '后台线程不能用 GPU';
   }
   return null;
 }
@@ -158,7 +173,7 @@ MoveNetEngine.prototype.dispose = function () {
   this.detector = null;
 };
 
-/* ---------- MoveNet 后台线程（CPU WASM 在 Worker 里跑，主线程只管画面，游戏更流畅） ---------- */
+/* ---------- MoveNet 后台线程（在 Worker 里跑 GPU 或 CPU，主线程只管画面，游戏更流畅） ---------- */
 function MoveNetWorkerEngine(info) {
   this.info = info;
   this.worker = null;
@@ -196,7 +211,7 @@ MoveNetWorkerEngine.prototype.init = function (onStatus) {
       clearTimeout(timer);
       reject(new Error('后台线程出错：' + (e.message || '')));
     };
-    w.postMessage({ type: 'init', base: BASE });
+    w.postMessage({ type: 'init', base: BASE, backend: self.info.backend || 'wasm' });
   });
 };
 

@@ -15,6 +15,7 @@ function $(id) { return document.getElementById(id); }
 
 var FAST = qs('bench') === 'fast'; // 自动化测试用：缩短测速时间
 var WARM_MS = FAST ? 800 : 2500;
+var WARM_MAX_MS = FAST ? 60000 : 25000; // 预热最多等这么久（第一次识别可能要编译显卡程序）
 var MEASURE_MS = FAST ? 3000 : 10000;
 
 var stage = null;
@@ -117,12 +118,13 @@ function fmtRes(r) {
   return [r.fps.toFixed(1) + ' 帧/秒', Math.round(r.p50) + ' / ' + Math.round(r.p95) + ' 毫秒', Math.round(r.renderFps) + ' 帧/秒'];
 }
 
-function pickBest(list) {
+// 选引擎：先看识别速度，和最快的差不到两成的都算候选；候选里挑画面最流畅的。
+export function pickBest(list) {
   var ok = list.filter(function (r) { return !r.error && r.fps > 0; });
   if (!ok.length) return null;
-  var smooth = ok.filter(function (r) { return r.renderFps >= 24; });
-  var pool = smooth.length ? smooth : ok;
-  pool.sort(function (a, b) { return (b.fps - a.fps) || (b.kpAvg - a.kpAvg); });
+  var maxFps = Math.max.apply(null, ok.map(function (r) { return r.fps; }));
+  var pool = ok.filter(function (r) { return r.fps >= maxFps * 0.8; });
+  pool.sort(function (a, b) { return ((b.renderFps || 0) - (a.renderFps || 0)) || (b.fps - a.fps) || (b.kpAvg - a.kpAvg); });
   return pool[0];
 }
 
@@ -210,6 +212,17 @@ function withTimeout(p, ms, msg) {
   });
 }
 
+// 预热：至少跑完 3 次识别、并且过了 WARM_MS 才开始计时，最多等 WARM_MAX_MS
+async function warmUp(my) {
+  var t0 = now();
+  while (my === gen) {
+    var el = now() - t0;
+    if (el >= WARM_MS && feed.stamps.length >= 3) return;
+    if (el >= WARM_MAX_MS) return;
+    await sleep(200);
+  }
+}
+
 async function runBench() {
   if (benching) return;
   var my = gen;
@@ -243,7 +256,7 @@ async function runBench() {
     var loadMs = now() - t0;
     feed.start();
     setRow(e.id, ['预热中', '—', '—'], 'running');
-    await sleep(WARM_MS);
+    await warmUp(my);
     if (my !== gen) return;
     feed.resetStats();
     kpSamples = [];

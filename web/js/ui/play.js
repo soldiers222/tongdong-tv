@@ -35,7 +35,7 @@ export function engineOrder() {
   if (s.engine && s.engine !== 'auto') order.push(s.engine);
   var d0 = store.get().day0;
   if (d0 && d0.best) order.push(d0.best);
-  order.push('mn-worker', 'mp-lite', 'mn-webgl', 'mn-wasm', 'mp-full');
+  order.push('mn-worker-gl', 'mp-lite', 'mn-webgl', 'mn-worker', 'mn-wasm', 'mp-full');
   var out = [];
   for (var i = 0; i < order.length; i++) {
     if (out.indexOf(order[i]) < 0 && engineInfo(order[i]) && !unsupportedReason(order[i])) out.push(order[i]);
