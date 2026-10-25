@@ -30,6 +30,14 @@ var device = null;
 var results = [];
 var lastFit = null;
 var showSummary = false;
+var gen = 0; // 每次进入或离开页面加 1；进行中的测速看到编号变了就停下，不会在后台继续跑
+
+function viewText() {
+  var v = window.TD && window.TD.view ? window.TD.view() : null;
+  if (!v) return '';
+  return v.w + '×' + v.h + '，像素比 ' + (Math.round(v.dpr * 100) / 100) + '，缩放 ' + v.s.toFixed(3) +
+    (Math.abs(v.zoom - 1) > 0.01 ? '，页面被放大 ' + v.zoom.toFixed(2) + ' 倍' : '');
+}
 
 function deviceInfo() {
   var ua = navigator.userAgent || '';
@@ -144,6 +152,7 @@ function summaryText() {
   lines.push('运行环境：' + (d.shell ? 'APK 外壳' + (d.native && d.native.app ? ' ' + d.native.app : '') : '浏览器') + (d.webview ? '，WebView ' + d.webview : (d.chrome ? '，Chrome ' + d.chrome : '')));
   lines.push('设备：' + (d.model || '未知型号') + (d.native && d.native.harmony ? '，HarmonyOS ' + d.native.harmony : '') + (d.android ? '，Android ' + d.android : '') + '，' + (d.cores || '?') + ' 核' + (d.mem ? '，内存约 ' + d.mem + ' GB' : '') + '，图形 ' + d.gl);
   lines.push('摄像头：' + (camInfo ? camInfo.label + '，' + camInfo.width + '×' + camInfo.height + (camFps ? '，实测 ' + camFps.toFixed(0) + ' 帧/秒' : '') : '未打开'));
+  lines.push('画面：' + viewText());
   lines.push('识别测速（识别帧率 / 单帧耗时中位数 / 95 分位 / 画面帧率 / 平均关键点）：');
   for (var i = 0; i < results.length; i++) {
     var r = results[i];
@@ -203,6 +212,7 @@ function withTimeout(p, ms, msg) {
 
 async function runBench() {
   if (benching) return;
+  var my = gen;
   benching = true;
   results = [];
   buildTable();
@@ -211,7 +221,7 @@ async function runBench() {
   btn.textContent = '测速中，约 2 分钟';
   btn.disabled = true;
   for (var i = 0; i < ENGINES.length; i++) {
-    if (!active) break;
+    if (my !== gen) return;
     var e = ENGINES[i];
     var why = unsupportedReason(e.id);
     if (why) {
@@ -223,23 +233,25 @@ async function runBench() {
     try {
       await withTimeout(feed.useEngine(e.id, function (txt) { setRow(e.id, [txt, '—', '—'], 'running'); }), 90000, '加载超时');
     } catch (err) {
+      if (my !== gen) return;
       var msg = (err && err.message ? err.message : String(err)).slice(0, 40);
       results.push({ id: e.id, label: e.label, error: msg });
       setRow(e.id, ['失败', msg, '—']);
       continue;
     }
+    if (my !== gen) return;
     var loadMs = now() - t0;
     feed.start();
     setRow(e.id, ['预热中', '—', '—'], 'running');
     await sleep(WARM_MS);
-    if (!active) break;
+    if (my !== gen) return;
     feed.resetStats();
     kpSamples = [];
     var tStart = now();
     var rStart = renders.length ? renders[renders.length - 1] : tStart;
     setRow(e.id, ['测量中', '—', '—'], 'running');
     await sleep(MEASURE_MS);
-    if (!active) break;
+    if (my !== gen) return;
     var st = feed.stats(MEASURE_MS);
     var rCount = 0;
     for (var k = 0; k < renders.length; k++) if (renders[k] > rStart) rCount++;
@@ -258,10 +270,10 @@ async function runBench() {
     results.push(r);
     setRow(e.id, fmtRes(r));
   }
+  if (my !== gen) return;
   benching = false;
   btn.disabled = false;
   btn.textContent = '重新测速';
-  if (!active) return;
   var best = pickBest(results);
   var v = verdictFor(best);
   showVerdict(v);
@@ -284,7 +296,7 @@ async function runBench() {
   if (best) {
     try {
       await feed.useEngine(best.id);
-      if (active) feed.start();
+      if (my === gen) feed.start();
     } catch (e3) { /* ignore */ }
   }
 }
@@ -320,6 +332,7 @@ function restorePrevious() {
 export var day0Screen = {
   manageFocus: true,
   enter: function () {
+    gen++;
     active = true;
     benching = false;
     showSummary = false;
@@ -341,6 +354,7 @@ export var day0Screen = {
     $('d0-env').textContent = device.shell ? 'APK 外壳' + (device.webview ? '，WebView ' + device.webview : '') : '浏览器' + (device.chrome ? '，Chrome ' + device.chrome : '');
     var gl = String(device.gl);
     $('d0-dev').textContent = (device.model || '未知型号') + '，' + (device.cores || '?') + ' 核，' + (gl.length > 34 ? gl.slice(0, 33) + '…' : gl);
+    $('d0-view').textContent = viewText();
     $('d0-run').onclick = runBench;
     $('d0-summary-btn').onclick = toggleSummary;
     setInterceptor(function (name) {
@@ -356,23 +370,27 @@ export var day0Screen = {
       return;
     }
     $('d0-cam').innerHTML = '<span class="dot"></span>正在打开摄像头';
+    var my = gen;
     openCamera($('cam')).then(function (info) {
-      if (!active) return;
+      if (my !== gen) return;
       camInfo = info;
       stage.setVideoSize(info.width, info.height);
       $('d0-cam').innerHTML = '<span class="dot ok"></span>' + info.width + '×' + info.height + '，测帧率中';
       return measureCamFps($('cam'), 2000).then(function (f) {
+        if (my !== gen) return;
         camFps = f;
-        if (active) $('d0-cam').innerHTML = '<span class="dot ok"></span>' + info.width + '×' + info.height + '，' + Math.round(f) + ' 帧/秒';
+        $('d0-cam').innerHTML = '<span class="dot ok"></span>' + info.width + '×' + info.height + '，' + Math.round(f) + ' 帧/秒';
       });
     }).catch(function (e) {
-      if (!active) return;
+      if (my !== gen) return;
       $('d0-cam').innerHTML = '<span class="dot bad"></span>' + cameraErrorText(e);
       $('d0-fit').textContent = '摄像头打不开，先按上面的提示处理';
     });
   },
   exit: function () {
+    gen++;
     active = false;
+    benching = false;
     feed.stop();
     if (rafId) cancelAnimationFrame(rafId);
     rafId = 0;

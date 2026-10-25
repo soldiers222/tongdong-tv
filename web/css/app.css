@@ -35,6 +35,7 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
   background: var(--night);
   color: var(--chalk);
   font-family: var(--font-body);
@@ -43,6 +44,9 @@ html, body {
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* 固定住整页：电视浏览器在焦点移动时会自己滚动页面，固定后不会把画面带偏 */
+body { position: fixed; left: 0; top: 0; right: 0; bottom: 0; }
 
 body.on-home { background: var(--track); }
 body.on-play { background: #000; }

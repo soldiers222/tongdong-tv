@@ -87,6 +87,35 @@ try {
     await page.close();
   }
 
+  // 1b. 电视视口：像素比 1.75 的小视口；WebView 先把页面缩小又恢复（华为电视上出现过画面被放大裁掉）
+  {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1097, height: 617, deviceScaleFactor: 1.75 });
+    const cdp = await page.target().createCDPSession();
+    page.on('pageerror', (e) => pageErrors.push('tv → ' + e.message));
+    await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 0.571 });
+    await page.goto(BASE + '/?mock=still&screen=day0', { waitUntil: 'load' });
+    await waitFor(page, () => document.querySelector('#screen-day0.active'), 8000);
+    await sleep(600);
+    await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 });
+    await sleep(400);
+    // 焦点移到最下面的按钮，再按一次方向键
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowLeft');
+    await sleep(200);
+    const box = await page.evaluate(() => {
+      const r = document.getElementById('app').getBoundingClientRect();
+      const de = document.documentElement;
+      return { l: r.left, t: r.top, r: r.right, b: r.bottom, cw: de.clientWidth, ch: de.clientHeight, sx: window.scrollX, sy: window.scrollY, view: window.TD.view() };
+    });
+    const fits = Math.abs(box.l) < 2 && Math.abs(box.t) < 2 && Math.abs(box.r - box.cw) < 2 && Math.abs(box.b - box.ch) < 2;
+    check('电视视口下画布正好铺满屏幕', fits, JSON.stringify(box));
+    check('焦点移动不滚动页面', box.sx === 0 && box.sy === 0);
+    check('设备测试显示画面信息', /像素比/.test(await page.evaluate(() => document.getElementById('d0-view').textContent)));
+    await shot(page, '00-tv-viewport');
+    await page.close();
+  }
+
   // 2. 西瓜切切切（模拟骨架）
   {
     const page = await open('/?mock=fruit&screen=fruit&dur=12');

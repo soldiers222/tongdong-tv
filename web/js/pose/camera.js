@@ -1,6 +1,8 @@
 // 摄像头：打开一次后整个会话复用，避免升降摄像头反复升降。
 var stream = null;
 var info = null;
+var pending = null; // 正在打开中的请求，重复调用时共用
+var gen = 0;        // closeCamera 时加 1：关掉之后才拿到的画面流直接停掉，不会让摄像头一直开着
 
 export function cameraSupported() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
@@ -19,6 +21,8 @@ function waitForSize(video, ms) {
 
 export function openCamera(video, deviceId) {
   if (stream && stream.active && video.srcObject === stream) return Promise.resolve(info);
+  if (pending) return pending;
+  var my = gen;
   if (!cameraSupported()) {
     var err = new Error('unsupported');
     err.code = window.isSecureContext === false ? 'insecure' : 'unsupported';
@@ -27,12 +31,18 @@ export function openCamera(video, deviceId) {
   var v = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } };
   if (deviceId) v.deviceId = { exact: deviceId };
   else v.facingMode = 'user';
-  return navigator.mediaDevices.getUserMedia({ audio: false, video: v }).catch(function (e) {
+  pending = navigator.mediaDevices.getUserMedia({ audio: false, video: v }).catch(function (e) {
     if (e && (e.name === 'OverconstrainedError' || e.name === 'ConstraintNotSatisfiedError' || e.name === 'NotFoundError')) {
       return navigator.mediaDevices.getUserMedia({ audio: false, video: true });
     }
     throw e;
   }).then(function (s) {
+    if (my !== gen) {
+      stopTracks(s);
+      var ab = new Error('closed');
+      ab.code = 'closed';
+      throw ab;
+    }
     stream = s;
     video.muted = true;
     video.setAttribute('playsinline', '');
@@ -51,15 +61,24 @@ export function openCamera(video, deviceId) {
       fps: st.frameRate ? Math.round(st.frameRate) : null,
       deviceId: st.deviceId || null
     };
+    pending = null;
     return info;
+  }, function (e) {
+    pending = null;
+    throw e;
   });
+  return pending;
+}
+
+function stopTracks(s) {
+  var tracks = s ? s.getTracks() : [];
+  for (var i = 0; i < tracks.length; i++) tracks[i].stop();
 }
 
 export function closeCamera(video) {
-  if (stream) {
-    var tracks = stream.getTracks();
-    for (var i = 0; i < tracks.length; i++) tracks[i].stop();
-  }
+  gen++;
+  pending = null;
+  stopTracks(stream);
   stream = null;
   info = null;
   if (video) video.srcObject = null;
@@ -70,7 +89,7 @@ export function cameraInfo() { return info; }
 
 export function cameraErrorText(e) {
   var n = e && (e.code || e.name);
-  if (n === 'insecure') return '摄像头需要用 https 网址打开。请用 Netlify 给的 https 地址，或用电视版 APK。';
+  if (n === 'insecure') return '摄像头需要用 https 网址打开。请用网页版的 https 地址，或用电视版 APK。';
   if (n === 'unsupported') return '这个浏览器不能使用摄像头。请改用电视版 APK，或在手机上打开后投屏到电视。';
   if (n === 'NotAllowedError' || n === 'PermissionDeniedError' || n === 'SecurityError') {
     return '没有拿到摄像头权限。请在弹窗里选「允许」；没有弹窗的话，到系统设置里给这个应用打开相机权限。';

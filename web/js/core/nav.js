@@ -7,6 +7,11 @@ var interceptor = null;
 var onBackCb = null;
 var onAnyKeyCb = null;
 
+// 移动焦点时不让浏览器滚动页面（老版本 WebView 不认这个参数，也不会报错）
+function focusEl(el) {
+  try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+}
+
 var KEYCODES = {
   37: 'left', 38: 'up', 39: 'right', 40: 'down',
   13: 'enter',
@@ -42,7 +47,7 @@ export function focusables(root) {
 export function setScope(root, preferred) {
   scope = root;
   var target = preferred && isVisible(preferred) ? preferred : focusables(root)[0];
-  if (target) target.focus();
+  if (target) focusEl(target);
 }
 
 export function getScope() { return scope; }
@@ -56,14 +61,14 @@ export function move(dir) {
   if (!list.length) return;
   var cur = document.activeElement;
   if (list.indexOf(cur) < 0) {
-    list[0].focus();
+    focusEl(list[0]);
     return;
   }
   var hint = cur.getAttribute && cur.getAttribute('data-nav-' + dir);
   if (hint) {
     var target = document.getElementById(hint);
     if (target && list.indexOf(target) >= 0) {
-      target.focus();
+      focusEl(target);
       sfx.select();
       return;
     }
@@ -85,7 +90,7 @@ export function move(dir) {
     if (score < bestScore) { bestScore = score; best = el; }
   }
   if (best) {
-    best.focus();
+    focusEl(best);
     sfx.select();
   }
 }

@@ -56,6 +56,7 @@ public class MainActivity extends Activity {
     private PermissionRequest pendingRequest;
     private long lastBackAt;
     private boolean stopped;
+    private boolean askingPermission; // 系统权限弹窗显示期间，不当作切到后台
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -74,13 +75,20 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
-        s.setUseWideViewPort(true);
-        s.setLoadWithOverviewMode(true);
+        // 页面自己把 1920×1080 的画布缩放到屏幕，WebView 不要再做任何缩放：
+        // 打开宽视口/总览模式时，电视会先把页面缩小、随后又恢复，画面就被放大裁掉了。
+        s.setUseWideViewPort(false);
+        s.setLoadWithOverviewMode(false);
         s.setSupportZoom(false);
-        s.setTextZoom(100); // 不跟随系统字号，界面是固定比例的画布
+        s.setBuiltInZoomControls(false);
+        s.setDisplayZoomControls(false);
+        s.setTextZoom(100); // 不跟随系统字号
         web.setWebViewClient(new Client());
         web.setWebChromeClient(new Chrome());
         web.addJavascriptInterface(new NativeBridge(), "TongdongNative");
+        web.setVerticalScrollBarEnabled(false);
+        web.setHorizontalScrollBarEnabled(false);
+        web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
         setContentView(web);
@@ -103,9 +111,12 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onStop() {
-        stopped = true;
-        web.evaluateJavascript("window.__tdPause && window.__tdPause()", null);
-        web.onPause();
+        // 摄像头权限弹窗在有的系统上会让本页面进入 onStop，这时不能关摄像头
+        if (!askingPermission) {
+            stopped = true;
+            web.evaluateJavascript("window.__tdPause && window.__tdPause()", null);
+            web.onPause();
+        }
         super.onStop();
     }
 
@@ -279,6 +290,7 @@ public class MainActivity extends Activity {
         }
         if (pendingRequest != null) pendingRequest.deny();
         pendingRequest = request;
+        askingPermission = true;
         requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
     }
 
@@ -286,6 +298,7 @@ public class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQ_CAMERA) return;
+        askingPermission = false;
         boolean ok = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
         if (pendingRequest != null) {
             if (ok) pendingRequest.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
