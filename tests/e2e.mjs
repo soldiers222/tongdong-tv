@@ -54,11 +54,53 @@ const args = [
 if (FIXTURE) args.push('--use-file-for-fake-video-capture=' + FIXTURE);
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args, protocolTimeout: 300000 });
 
+// 模拟电视版 APK 的安卓接口（TongdongNative）：原生识别每秒推 25 组关键点（站着的人，右手左右挥）
+function nativeStub() {
+  var timer = null;
+  var t0 = 0;
+  var log = { starts: 0, stops: 0, previews: [] };
+  window.__nativeLog = log;
+  function pose(t) {
+    var p = [
+      [0.50, 0.20], [0.49, 0.19], [0.51, 0.19], [0.48, 0.20], [0.52, 0.20],
+      [0.45, 0.30], [0.55, 0.30], [0.42, 0.42], [0.58, 0.40],
+      [0.40, 0.52], [0.60, 0.40], [0.46, 0.55], [0.54, 0.55],
+      [0.46, 0.72], [0.54, 0.72], [0.46, 0.90], [0.54, 0.90]
+    ];
+    var ph = t / 1000 * Math.PI * 2 * 0.7;
+    p[10] = [0.5 + 0.3 * Math.sin(ph), 0.32 + 0.08 * Math.cos(ph * 2)];
+    p[8] = [0.55 + 0.12 * Math.sin(ph), 0.38];
+    var k = [];
+    for (var i = 0; i < 17; i++) k.push(p[i][0], p[i][1], 0.8);
+    return k;
+  }
+  window.TongdongNative = {
+    poseAvailable: function () { return true; },
+    hasCameraPermission: function () { return true; },
+    poseStart: function () {
+      log.starts++;
+      if (!timer) {
+        t0 = performance.now();
+        timer = setInterval(function () {
+          if (window.__tdNativePose) window.__tdNativePose({ k: pose(performance.now() - t0), w: 640, h: 480, age: 30, ms: 18.5 });
+        }, 40);
+      }
+      return JSON.stringify({ ok: true, w: 640, h: 480 });
+    },
+    poseStop: function () { log.stops++; clearInterval(timer); timer = null; },
+    poseInfo: function () { return JSON.stringify({ camera: '0', facing: 'back', w: 640, h: 480, pw: 1440, ph: 1080, rotation: 0, threads: 4, input: 'UINT8', running: !!timer, p50: 18.5, p95: 22, fps: 25, error: '' }); },
+    cameraSizes: function () { return '[]'; },
+    preview: function (json) { log.previews.push(JSON.parse(json)); },
+    info: function () { return JSON.stringify({ manufacturer: 'HUAWEI', model: 'FREU-560B', android: '12', sdk: 31, harmony: '4.3.0', app: 'stub', webview: 'stub', cameraPermission: true, nativePose: true }); }
+  };
+}
+
 const external = [];
 const pageErrors = [];
-async function open(path) {
+async function open(path, opts) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
+  if (opts && opts.nativeStub) await page.evaluateOnNewDocument(nativeStub);
   page.on('request', (req) => {
     const u = req.url();
     if (!u.startsWith(BASE) && !u.startsWith('data:') && !u.startsWith('blob:')) external.push(u);
@@ -179,9 +221,11 @@ try {
     const page = await open('/?screen=day0&bench=fast');
     check('设备测试打开摄像头', await waitFor(page, () => /×/.test(document.getElementById('d0-cam').textContent), 15000));
     await page.click('#d0-run');
-    const ok = await waitFor(page, () => !window.TD.day0.debug().benching && window.TD.day0.debug().results.length === 6, 330000);
+    const ok = await waitFor(page, () => !window.TD.day0.debug().benching && window.TD.day0.debug().results.length === 7, 330000);
     const dbg = await page.evaluate(() => window.TD.day0.debug());
-    check('六个引擎都测完', ok, dbg.results.map((r) => r.id + (r.error ? '（' + r.error + '）' : ' ' + r.fps.toFixed(1) + 'fps/' + r.kpAvg.toFixed(1) + '点')).join('；'));
+    check('七个引擎都测完', ok, dbg.results.map((r) => r.id + (r.error ? '（' + r.error + '）' : ' ' + r.fps.toFixed(1) + 'fps/' + r.kpAvg.toFixed(1) + '点')).join('；'));
+    const nat = dbg.results.find((x) => x.id === 'native');
+    check('浏览器里原生识别标为不支持', nat && /只有电视版 APK 能用/.test(nat.error || ''), nat ? nat.error : '无结果');
     for (const id of ['mn-worker-gl', 'mn-worker', 'mp-lite', 'mn-webgl', 'mn-wasm']) {
       const r = dbg.results.find((x) => x.id === id);
       check(id + ' 识别到人体', r && !r.error && r.fps > 0 && r.kpAvg >= 8, r ? (r.error || r.kpAvg.toFixed(1) + ' 个关键点') : '无结果');
@@ -194,6 +238,69 @@ try {
     await sleep(300);
     await shot(page, '08-day0-summary');
     writeFileSync(join(OUT, 'day0-summary.txt'), dbg.summary);
+    await page.close();
+  }
+
+  // 4c. 电视版原生识别（模拟安卓接口）：设备测试
+  {
+    const page = await open('/?screen=day0&bench=fast&engines=native,mn-wasm', { nativeStub: true });
+    check('原生识别：设备测试直接用原生摄像头', await waitFor(page, () => /原生/.test(document.getElementById('d0-cam').textContent), 8000),
+      await page.evaluate(() => document.getElementById('d0-cam').textContent));
+    check('原生识别：收到关键点', await waitFor(page, () => window.TD.feed.engineId === 'native' && window.TD.feed.latest && window.TD.feed.latest.kp, 5000));
+    const lay = await page.evaluate(() => {
+      const p = window.__nativeLog.previews.filter((x) => x.show).pop();
+      const r = document.querySelector('.d0-preview').getBoundingClientRect();
+      return { p, r: { x: r.left, y: r.top, w: r.width, h: r.height }, cls: document.body.classList.contains('native-cam') };
+    });
+    const near = (a, b) => Math.abs(a - b) < 2;
+    check('原生识别：网页变透明，预览层对准画面框', lay.cls && lay.p && near(lay.p.x, lay.r.x) && near(lay.p.y, lay.r.y) && near(lay.p.w, lay.r.w) && lay.p.fit === 'contain', JSON.stringify(lay));
+    await sleep(800);
+    await shot(page, '11-native-day0');
+    await page.click('#d0-run');
+    const ok = await waitFor(page, () => !window.TD.day0.debug().benching && window.TD.day0.debug().results.length === 2, 150000);
+    const dbg = await page.evaluate(() => window.TD.day0.debug());
+    const nat = dbg.results.find((x) => x.id === 'native');
+    const wasm = dbg.results.find((x) => x.id === 'mn-wasm');
+    check('原生识别：测速完成，速度接近每秒 25 次', ok && nat && !nat.error && nat.fps > 18 && nat.fps < 30, nat ? (nat.error || nat.fps.toFixed(1) + ' 帧/秒，画面 ' + Math.round(nat.renderFps) + ' 帧/秒') : '无结果');
+    check('原生识别：单帧耗时用安卓里实测的', nat && nat.p50 > 18 && nat.p50 < 19, nat ? String(nat.p50) : '');
+    check('原生识别：关键点数量', nat && nat.kpAvg >= 15, nat ? nat.kpAvg.toFixed(1) : '');
+    check('原生识别让出摄像头后，网页摄像头能打开', wasm && !wasm.error, wasm ? (wasm.error || wasm.fps.toFixed(1) + ' 帧/秒') : '无结果');
+    check('测速后接着用最快的原生识别', await waitFor(page, () => window.TD.feed.engineId === 'native' && document.body.classList.contains('native-cam'), 8000));
+    const summary = await page.evaluate(() => window.TD.day0.debug().summary);
+    check('结果摘要里有原生识别和两路摄像头', /原生识别（多核 CPU）：\d/.test(summary) && /原生摄像头：Camera2 #0 后置，识别 640×480，预览 1440×1080/.test(summary) && /网页摄像头：/.test(summary),
+      summary.split('\n').filter((l) => /原生|摄像头/.test(l)).join(' / '));
+    writeFileSync(join(OUT, 'day0-native-summary.txt'), summary);
+    await sleep(600);
+    await shot(page, '12-native-day0-done');
+    const stops0 = await page.evaluate(() => window.__nativeLog.stops);
+    await page.evaluate(() => window.__tdBack());
+    check('离开设备测试：停掉原生识别、收起预览层', await waitFor(page, (n) => {
+      const log = window.__nativeLog;
+      const last = log.previews[log.previews.length - 1];
+      return document.querySelector('#screen-home.active') && !document.body.classList.contains('native-cam') && log.stops > n && last && last.show === false && !window.TD.feed.engine;
+    }, 3000, stops0));
+    await page.close();
+  }
+
+  // 4d. 电视版原生识别（模拟安卓接口）：切水果
+  {
+    const page = await open('/?screen=fruit&dur=10', { nativeStub: true });
+    check('原生识别：切水果用原生识别', await waitFor(page, () => window.TD.feed.engineId === 'native' && window.TD.play.debug().running, 10000), await page.evaluate(() => window.TD.feed.engineId));
+    const lay = await page.evaluate(() => ({ p: window.__nativeLog.previews.filter((x) => x.show).pop(), cls: document.body.classList.contains('native-cam') }));
+    check('原生识别：运动页透明，预览层铺满全屏', lay.cls && lay.p && lay.p.fit === 'cover' && Math.abs(lay.p.w - 1920) < 2 && Math.abs(lay.p.h - 1080) < 2, JSON.stringify(lay.p));
+    await sleep(5000);
+    await shot(page, '13-native-fruit');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 40000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('原生识别：切水果一局结束', done && rec && rec.type === 'fruit', rec ? `得分 ${rec.score}，切中 ${rec.sliced}` : '');
+    const stops = await page.evaluate(() => window.__nativeLog.stops);
+    await page.evaluate(() => window.__tdPause());
+    check('切到后台：停掉原生识别', await page.evaluate((n) => window.__nativeLog.stops > n && !document.body.classList.contains('native-cam'), stops));
+    const starts = await page.evaluate(() => window.__nativeLog.starts);
+    await page.evaluate(() => window.__tdResume());
+    check('回到前台：重新启动原生识别', await waitFor(page, (n) => window.__nativeLog.starts > n && window.TD.play.debug().running && document.body.classList.contains('native-cam'), 8000, starts));
+    await page.evaluate(() => window.TD.go('home'));
+    check('回首页：停掉原生识别', await waitFor(page, () => document.querySelector('#screen-home.active') && !document.body.classList.contains('native-cam') && !window.TD.feed.engine, 4000));
     await page.close();
   }
 

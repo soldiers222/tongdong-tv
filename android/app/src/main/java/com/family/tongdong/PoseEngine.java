@@ -3,6 +3,7 @@ package com.family.tongdong;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.ImageFormat;
+import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -16,6 +17,7 @@ import android.media.ImageReader;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
+import android.util.Log;
 import android.util.Range;
 import android.util.Size;
 import android.view.Surface;
@@ -34,6 +36,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 原生姿态识别：Camera2 取帧 → MoveNet Lightning（TensorFlow Lite，多线程 CPU）→ 17 个关键点。
@@ -43,6 +47,9 @@ import java.util.Locale;
  *
  * 输出的关键点坐标是相对摄像头画面的 0–1 归一化坐标（未镜像），顺序同 MoveNet：
  * 鼻、左眼、右眼、左耳、右耳、左肩、右肩、左肘、右肘、左腕、右腕、左髋、右髋、左膝、右膝、左踝、右踝。
+ *
+ * 「画面」指摆正以后的画面（和预览层显示的一致）：传感器装歪了（SENSOR_ORIENTATION 是 90/180/270）
+ * 时，取样时转正再送进模型，宽高也按转正后的算。
  */
 final class PoseEngine {
     interface Listener {
@@ -55,6 +62,7 @@ final class PoseEngine {
     static final String MODEL = "models/movenet_lightning_int8.tflite";
     private static final int IN = 192;      // MoveNet Lightning 输入边长
     private static final int THREADS = 4;   // 8 核电视留一半给画面和系统
+    private static final String TAG = "Tongdong"; // 电脑上看日志：adb logcat -s Tongdong
 
     private final Context ctx;
     private final Listener listener;
@@ -64,10 +72,13 @@ final class PoseEngine {
     private HandlerThread inferThread;
     private Handler inferHandler;
 
-    private CameraDevice camera;
-    private CameraCaptureSession session;
+    private volatile CameraDevice camera;
+    private volatile CameraCaptureSession session;
+    private CountDownLatch openLatch;   // 摄像头打开（或失败）后放行
+    private CountDownLatch closeLatch;  // 摄像头完全关掉后放行
     private ImageReader reader;
     private Surface previewSurface;
+    private SurfaceTexture previewTexture;
 
     private Interpreter interpreter;
     private ByteBuffer input;
@@ -76,11 +87,18 @@ final class PoseEngine {
 
     private volatile boolean running;
     private volatile boolean busy;
+    private volatile int generation;     // 每次 start() 加 1，出错后的清理只清理那一次的
+    // 跟踪裁剪区域（摄像头画面归一化坐标 {y0, x0, y1, x1}，可以超出 0–1，超出部分补黑）。
+    // 同 MoveNet 官方做法：上一帧找到人后，这一帧只看人周围的正方形区域，小个子、远一点也认得准。
+    private volatile float[] crop;
     private String cameraId;
     private Size analysisSize;
-    private Size previewSize;
+    private volatile Size previewSize;
     private int sensorOrientation;
+    private boolean front;               // 前置摄像头：系统给预览画面做了左右翻转，识别用的画面没翻
     private boolean realtimeTimestamps;
+    private String hwLevel = "";
+    private volatile String fpsRange = "";
 
     // 统计
     private final float[] recentMs = new float[60];
@@ -113,16 +131,28 @@ final class PoseEngine {
         return running;
     }
 
+    /** 识别画面的宽高（转正后） */
     Size getAnalysisSize() {
-        return analysisSize;
+        return upright(analysisSize);
     }
 
+    /** 预览画面的宽高（转正后，和预览层里看到的一致） */
     Size getPreviewSize() {
-        return previewSize;
+        return upright(previewSize);
     }
 
     int getSensorOrientation() {
         return sensorOrientation;
+    }
+
+    /** 预览层里的画面已经被系统左右翻转过（前置摄像头） */
+    boolean isPreviewMirrored() {
+        return front;
+    }
+
+    private Size upright(Size s) {
+        if (s == null) return null;
+        return sensorOrientation % 180 == 0 ? s : new Size(s.getHeight(), s.getWidth());
     }
 
     /** 选摄像头和分辨率（不打开摄像头）。返回 null 表示成功，否则是原因。 */
@@ -145,13 +175,22 @@ final class PoseEngine {
             Size[] yuv = map.getOutputSizes(ImageFormat.YUV_420_888);
             Size[] prev = map.getOutputSizes(SurfaceTexture.class);
             if (yuv == null || yuv.length == 0) return "摄像头不支持 YUV 取帧";
-            analysisSize = closest(yuv, 640, 480);
+            Rect active = ch.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+            analysisSize = pickAnalysis(yuv, active);
             previewSize = largestSameAspect(prev != null && prev.length > 0 ? prev : yuv, analysisSize, 1920, 1080);
             Integer so = ch.get(CameraCharacteristics.SENSOR_ORIENTATION);
-            sensorOrientation = so == null ? 0 : so;
+            sensorOrientation = so == null ? 0 : ((so % 360) + 360) % 360 / 90 * 90;
+            Integer facing = ch.get(CameraCharacteristics.LENS_FACING);
+            front = facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT;
             Integer ts = ch.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE);
             realtimeTimestamps = ts != null && ts == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME;
+            Integer lv = ch.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+            hwLevel = levelName(lv == null ? -1 : lv);
             cameraId = chosen;
+            Log.i(TAG, "摄像头 " + chosen + "（共 " + ids.length + " 个）" + (front ? " 前置" : " 后置")
+                    + " 等级 " + hwLevel + " 传感器 " + sensorOrientation + "° " + (active == null ? "" : active.width() + "x" + active.height())
+                    + " 识别 " + analysisSize + " 预览 " + previewSize
+                    + " 可用 YUV " + Arrays.toString(yuv));
             return null;
         } catch (Exception e) {
             return "摄像头信息读取失败：" + e.getMessage();
@@ -178,43 +217,58 @@ final class PoseEngine {
 
         reader = ImageReader.newInstance(analysisSize.getWidth(), analysisSize.getHeight(), ImageFormat.YUV_420_888, 2);
         reader.setOnImageAvailableListener(this::onImage, camHandler);
+        this.previewTexture = previewTexture;
         if (previewTexture != null) {
             previewTexture.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
             previewSurface = new Surface(previewTexture);
         } else {
             previewSurface = null;
         }
+        generation++;
         running = true;
         busy = false;
+        crop = null;
         frames = 0;
         recentCount = 0;
         statStart = SystemClock.elapsedRealtime();
+        final CountDownLatch opened = new CountDownLatch(1);
+        final CountDownLatch closed = new CountDownLatch(1);
+        openLatch = opened;
+        closeLatch = closed;
         try {
             CameraManager cm = (CameraManager) ctx.getSystemService(Context.CAMERA_SERVICE);
             cm.openCamera(cameraId, new CameraDevice.StateCallback() {
                 @Override
                 public void onOpened(CameraDevice device) {
-                    if (!running) {
-                        device.close();
-                        return;
-                    }
+                    // 先记下来再放行：stop() 等到这里之后会负责关掉
                     camera = device;
-                    createSession();
+                    opened.countDown();
+                    if (running) createSession();
                 }
 
                 @Override
                 public void onDisconnected(CameraDevice device) {
+                    opened.countDown();
                     device.close();
-                    fail("摄像头被断开（可能被别的应用占用）");
+                    if (running) fail("摄像头被断开（可能被别的应用占用）");
                 }
 
                 @Override
                 public void onError(CameraDevice device, int error) {
+                    opened.countDown();
                     device.close();
-                    fail("摄像头打开失败（错误 " + error + "）");
+                    if (running) fail("摄像头打开失败（错误 " + error + "）");
+                }
+
+                @Override
+                public void onClosed(CameraDevice device) {
+                    closed.countDown();
                 }
             }, camHandler);
         } catch (Exception e) {
+            // 没打开成功，不用等摄像头的回调
+            opened.countDown();
+            closed.countDown();
             running = false;
             releaseCamera();
             return "摄像头打开失败：" + e.getMessage();
@@ -243,6 +297,8 @@ final class PoseEngine {
                         b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
                         Range<Integer> fps = bestFpsRange();
                         if (fps != null) b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps);
+                        fpsRange = fps == null ? "" : fps.toString();
+                        Log.i(TAG, "开始取帧 帧率范围 " + fpsRange + " 预览 " + previewSize);
                         s.setRepeatingRequest(b.build(), null, camHandler);
                     } catch (CameraAccessException | IllegalStateException e) {
                         fail("摄像头取帧失败：" + e.getMessage());
@@ -251,6 +307,15 @@ final class PoseEngine {
 
                 @Override
                 public void onConfigureFailed(CameraCaptureSession s) {
+                    if (!running) return;
+                    // 有的摄像头（比如 USB 摄像头）同时出两种分辨率不行：预览改成和识别一样大再试一次
+                    if (previewSurface != null && previewTexture != null && !previewSize.equals(analysisSize)) {
+                        Log.w(TAG, "两种分辨率配置失败，预览改成 " + analysisSize + " 再试");
+                        previewSize = analysisSize;
+                        previewTexture.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
+                        createSession();
+                        return;
+                    }
                     fail("摄像头配置失败");
                 }
             }, camHandler);
@@ -286,11 +351,17 @@ final class PoseEngine {
             busy = true;
             final long ts = img.getTimestamp();
             final long acquired = SystemClock.elapsedRealtimeNanos();
-            final int fw = img.getWidth(), fh = img.getHeight();
-            final float[] box = fill(img);
+            // 转正后的宽高：裁剪区域和关键点都用这个坐标系
+            final boolean swap = sensorOrientation % 180 != 0;
+            final int fw = swap ? img.getHeight() : img.getWidth();
+            final int fh = swap ? img.getWidth() : img.getHeight();
+            float[] c = crop;
+            if (c == null) c = initCrop(fw, fh);
+            final float[] used = c;
+            fill(img, used);
             img.close();
             img = null;
-            inferHandler.post(() -> infer(fw, fh, box, ts, acquired));
+            inferHandler.post(() -> infer(fw, fh, used, ts, acquired));
         } catch (Throwable t) {
             busy = false;
             lastError = String.valueOf(t.getMessage());
@@ -299,36 +370,89 @@ final class PoseEngine {
         }
     }
 
-    /** YUV 画面按比例缩放、上下（或左右）留黑边放进 192×192 输入。返回内容区 {左, 上, 宽, 高}（输入像素）。 */
-    private float[] fill(Image img) {
+    /** 整幅画面放进正方形（长边铺满，短边两侧留黑），等同于没有跟踪时的裁剪区域 */
+    static float[] initCrop(int fw, int fh) {
+        if (fw > fh) {
+            float y0 = (fh / 2f - fw / 2f) / fh;
+            return new float[]{y0, 0f, y0 + (float) fw / fh, 1f};
+        }
+        float x0 = (fw / 2f - fh / 2f) / fw;
+        return new float[]{0f, x0, 1f, x0 + (float) fh / fw};
+    }
+
+    /** 由这一帧的关键点算下一帧的裁剪区域（MoveNet 官方教程的 determine_crop_region） */
+    static float[] nextCrop(float[] k, int fw, int fh) {
+        final float th = 0.2f;
+        // 5/6 = 左右肩，11/12 = 左右髋
+        boolean torso = (k[11 * 3 + 2] > th || k[12 * 3 + 2] > th) && (k[5 * 3 + 2] > th || k[6 * 3 + 2] > th);
+        if (!torso) return initCrop(fw, fh);
+        float cx = (k[11 * 3] + k[12 * 3]) / 2f * fw, cy = (k[11 * 3 + 1] + k[12 * 3 + 1]) / 2f * fh;
+        float ty = 0, tx = 0, by = 0, bx = 0;
+        int[] torsoJoints = {5, 6, 11, 12};
+        for (int j : torsoJoints) {
+            ty = Math.max(ty, Math.abs(cy - k[j * 3 + 1] * fh));
+            tx = Math.max(tx, Math.abs(cx - k[j * 3] * fw));
+        }
+        for (int j = 0; j < 17; j++) {
+            if (k[j * 3 + 2] < th) continue;
+            by = Math.max(by, Math.abs(cy - k[j * 3 + 1] * fh));
+            bx = Math.max(bx, Math.abs(cx - k[j * 3] * fw));
+        }
+        float half = Math.max(Math.max(tx * 1.9f, ty * 1.9f), Math.max(by * 1.2f, bx * 1.2f));
+        half = Math.min(half, Math.max(Math.max(cx, fw - cx), Math.max(cy, fh - cy)));
+        if (half > Math.max(fw, fh) / 2f || half < 8) return initCrop(fw, fh);
+        float len = half * 2;
+        return new float[]{(cy - half) / fh, (cx - half) / fw, (cy - half + len) / fh, (cx - half + len) / fw};
+    }
+
+    /** 把裁剪区域里的 YUV 画面取样成 192×192 RGB 放进输入（区域超出画面的部分补黑） */
+    private void fill(Image img, float[] c) {
         Image.Plane[] p = img.getPlanes();
-        ByteBuffer yb = p[0].getBuffer(), ub = p[1].getBuffer(), vb = p[2].getBuffer();
-        int yRow = p[0].getRowStride(), yPix = p[0].getPixelStride();
-        int uvRow = p[1].getRowStride(), uvPix = p[1].getPixelStride();
-        int fw = img.getWidth(), fh = img.getHeight();
-        boolean flip = sensorOrientation == 180;
-        float scale = Math.min((float) IN / fw, (float) IN / fh);
-        int cw = Math.round(fw * scale), ch = Math.round(fh * scale);
-        int px = (IN - cw) / 2, py = (IN - ch) / 2;
+        sampleYuv(p[0].getBuffer(), p[1].getBuffer(), p[2].getBuffer(),
+                p[0].getRowStride(), p[0].getPixelStride(), p[1].getRowStride(), p[1].getPixelStride(),
+                img.getWidth(), img.getHeight(), sensorOrientation, c, input, inputType);
+    }
+
+    /**
+     * 纯计算部分单独拿出来，方便在电脑上测试。
+     * sw×sh 是传感器原始画面；rot 是画面要顺时针转多少度才正（0/90/180/270）；
+     * c 是转正后画面里的裁剪区域。
+     */
+    static void sampleYuv(ByteBuffer yb, ByteBuffer ub, ByteBuffer vb, int yRow, int yPix, int uvRow, int uvPix,
+                          int sw, int sh, int rot, float[] c, ByteBuffer input, DataType inputType) {
+        boolean swap = rot % 180 != 0;
+        int fw = swap ? sh : sw, fh = swap ? sw : sh; // 转正后的宽高
+        float sy = (c[2] - c[0]) / IN, sx = (c[3] - c[1]) / IN;
+        int[] xs = new int[IN];
+        for (int ox = 0; ox < IN; ox++) xs[ox] = (int) Math.floor((c[1] + (ox + 0.5f) * sx) * fw);
         input.rewind();
         boolean u8 = inputType == DataType.UINT8;
         boolean s8 = inputType == DataType.INT8;
         boolean i32 = inputType == DataType.INT32;
         for (int oy = 0; oy < IN; oy++) {
-            int cy = oy - py;
-            boolean rowIn = cy >= 0 && cy < ch;
-            int fy = rowIn ? Math.min(fh - 1, (int) ((cy + 0.5f) / scale)) : 0;
-            if (flip) fy = fh - 1 - fy;
-            int yRowOff = fy * yRow;
-            int uvRowOff = (fy >> 1) * uvRow;
+            int fy = (int) Math.floor((c[0] + (oy + 0.5f) * sy) * fh);
+            boolean rowIn = fy >= 0 && fy < fh;
             for (int ox = 0; ox < IN; ox++) {
-                int cx = ox - px;
                 int r = 0, g = 0, b = 0;
-                if (rowIn && cx >= 0 && cx < cw) {
-                    int fx = Math.min(fw - 1, (int) ((cx + 0.5f) / scale));
-                    if (flip) fx = fw - 1 - fx;
-                    int y = (yb.get(yRowOff + fx * yPix) & 0xff);
-                    int uvi = uvRowOff + (fx >> 1) * uvPix;
+                int fx = xs[ox];
+                if (rowIn && fx >= 0 && fx < fw) {
+                    // 转正后的 (fx, fy) → 传感器画面里的 (px, py)
+                    int px, py;
+                    if (rot == 90) {
+                        px = fy;
+                        py = sh - 1 - fx;
+                    } else if (rot == 180) {
+                        px = sw - 1 - fx;
+                        py = sh - 1 - fy;
+                    } else if (rot == 270) {
+                        px = sw - 1 - fy;
+                        py = fx;
+                    } else {
+                        px = fx;
+                        py = fy;
+                    }
+                    int y = (yb.get(py * yRow + px * yPix) & 0xff);
+                    int uvi = (py >> 1) * uvRow + (px >> 1) * uvPix;
                     int u = (ub.get(uvi) & 0xff) - 128;
                     int v = (vb.get(uvi) & 0xff) - 128;
                     r = clamp(y + ((1436 * v) >> 10));
@@ -346,14 +470,13 @@ final class PoseEngine {
                 }
             }
         }
-        return new float[]{px, py, cw, ch};
     }
 
     private static int clamp(int v) {
         return v < 0 ? 0 : (v > 255 ? 255 : v);
     }
 
-    private void infer(int fw, int fh, float[] box, long ts, long acquired) {
+    private void infer(int fw, int fh, float[] c, long ts, long acquired) {
         try {
             if (!running || interpreter == null) return;
             long t0 = SystemClock.elapsedRealtimeNanos();
@@ -367,15 +490,19 @@ final class PoseEngine {
             // 画面拍下到现在过了多久（网页据此做延迟补偿）
             long base = realtimeTimestamps ? ts : acquired;
             float age = Math.max(0, (t1 - base) / 1e6f);
+            // 裁剪区域内的坐标 → 摄像头画面归一化坐标
+            float[] k = new float[17 * 3];
+            for (int i = 0; i < 17; i++) {
+                k[i * 3] = c[1] + output[0][0][i][1] * (c[3] - c[1]);
+                k[i * 3 + 1] = c[0] + output[0][0][i][0] * (c[2] - c[0]);
+                k[i * 3 + 2] = output[0][0][i][2];
+            }
+            crop = nextCrop(k, fw, fh);
             StringBuilder sb = new StringBuilder(640);
             sb.append("{\"k\":[");
             for (int i = 0; i < 17; i++) {
-                float ny = output[0][0][i][0], nx = output[0][0][i][1], s = output[0][0][i][2];
-                // 192×192 输入坐标 → 摄像头画面归一化坐标
-                float fx = (nx * IN - box[0]) / box[2];
-                float fy = (ny * IN - box[1]) / box[3];
                 if (i > 0) sb.append(',');
-                sb.append(String.format(Locale.ROOT, "%.4f,%.4f,%.3f", fx, fy, s));
+                sb.append(String.format(Locale.ROOT, "%.4f,%.4f,%.3f", k[i * 3], k[i * 3 + 1], k[i * 3 + 2]));
             }
             sb.append("],\"w\":").append(fw).append(",\"h\":").append(fh)
                     .append(",\"age\":").append(Math.round(age))
@@ -404,17 +531,26 @@ final class PoseEngine {
         Interpreter.Options opt = new Interpreter.Options();
         opt.setNumThreads(THREADS);
         opt.setUseXNNPACK(true);
+        long t0 = SystemClock.elapsedRealtime();
         interpreter = new Interpreter(model, opt);
+        Log.i(TAG, "识别模型已加载，" + THREADS + " 线程，用时 " + (SystemClock.elapsedRealtime() - t0) + " 毫秒");
         inputType = interpreter.getInputTensor(0).dataType();
         int bytesPer = (inputType == DataType.UINT8 || inputType == DataType.INT8) ? 1 : 4;
         input = ByteBuffer.allocateDirect(IN * IN * 3 * bytesPer).order(ByteOrder.nativeOrder());
     }
 
+    /** 摄像头回调里出错：通知网页，再换个线程清理（清理要等摄像头线程里的回调，不能在摄像头线程里等） */
     private void fail(String msg) {
         lastError = msg;
         running = false;
-        releaseCamera();
+        Log.w(TAG, msg);
         listener.onError(msg);
+        final int g = generation;
+        new Thread(() -> {
+            synchronized (PoseEngine.this) {
+                if (generation == g && !running) releaseCamera();
+            }
+        }, "td-camera-fail").start();
     }
 
     synchronized void stop() {
@@ -423,18 +559,30 @@ final class PoseEngine {
     }
 
     private void releaseCamera() {
-        try {
-            if (session != null) session.close();
-        } catch (Exception ignored) {
-            // 忽略
-        }
+        // 在摄像头线程里（出错回调）不能等，否则自己等自己
+        boolean onCamThread = camThread != null && Thread.currentThread() == camThread;
+        // 摄像头还在打开中：等它打开（或失败），再关掉，不然会一直占着
+        if (!onCamThread) await(openLatch, 2000);
+        CameraCaptureSession s = session;
         session = null;
         try {
-            if (camera != null) camera.close();
+            if (s != null) s.close();
         } catch (Exception ignored) {
             // 忽略
         }
+        CameraDevice c = camera;
         camera = null;
+        if (c != null) {
+            try {
+                c.close();
+            } catch (Exception ignored) {
+                // 忽略
+            }
+            // 等摄像头真正关掉，网页摄像头紧接着打开时才不会撞上
+            if (!onCamThread) await(closeLatch, 1500);
+        }
+        openLatch = null;
+        closeLatch = null;
         // 先等取帧和识别线程停下，再释放画面缓冲，避免线程还在读已经释放的内存
         quitAndJoin(camThread);
         camThread = null;
@@ -447,6 +595,15 @@ final class PoseEngine {
         if (previewSurface != null) {
             previewSurface.release();
             previewSurface = null;
+        }
+    }
+
+    private static void await(CountDownLatch l, long ms) {
+        if (l == null) return;
+        try {
+            l.await(ms, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -474,16 +631,20 @@ final class PoseEngine {
         try {
             JSONObject o = new JSONObject();
             o.put("camera", cameraId == null ? "" : cameraId);
-            if (analysisSize != null) {
-                o.put("w", analysisSize.getWidth());
-                o.put("h", analysisSize.getHeight());
+            o.put("facing", front ? "front" : "back");
+            Size a = getAnalysisSize(), p = getPreviewSize();
+            if (a != null) {
+                o.put("w", a.getWidth());
+                o.put("h", a.getHeight());
             }
-            if (previewSize != null) {
-                o.put("pw", previewSize.getWidth());
-                o.put("ph", previewSize.getHeight());
+            if (p != null) {
+                o.put("pw", p.getWidth());
+                o.put("ph", p.getHeight());
             }
             o.put("rotation", sensorOrientation);
             o.put("threads", THREADS);
+            o.put("level", hwLevel);
+            o.put("fpsRange", fpsRange);
             o.put("input", inputType == null ? "" : inputType.toString());
             o.put("running", running);
             int n = Math.min(recentCount, recentMs.length);
@@ -500,6 +661,38 @@ final class PoseEngine {
         } catch (Exception e) {
             return "{}";
         }
+    }
+
+    private static String levelName(int lv) {
+        switch (lv) {
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY: return "LEGACY";
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED: return "LIMITED";
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL: return "FULL";
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3: return "LEVEL_3";
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL: return "EXTERNAL";
+            default: return String.valueOf(lv);
+        }
+    }
+
+    /**
+     * 识别用的分辨率：和传感器本身同样的宽高比（不裁视野，孩子跑到边上也看得见），高度接近 480。
+     * 识别只取人周围 192×192 的区域，分辨率再高也没用，反而让摄像头多干活。
+     */
+    static Size pickAnalysis(Size[] sizes, Rect active) {
+        if (active != null && active.width() > 0 && active.height() > 0) {
+            float aspect = (float) active.width() / active.height();
+            Size best = null;
+            for (Size s : sizes) {
+                float a = (float) s.getWidth() / s.getHeight();
+                if (Math.abs(a - aspect) / aspect > 0.03f) continue;
+                if (s.getHeight() < 360 || s.getWidth() > 1280) continue;
+                int d = Math.abs(s.getHeight() - 480);
+                int bd = best == null ? Integer.MAX_VALUE : Math.abs(best.getHeight() - 480);
+                if (d < bd || (d == bd && s.getHeight() < best.getHeight())) best = s;
+            }
+            if (best != null) return best;
+        }
+        return closest(sizes, 640, 480);
     }
 
     private static Size closest(Size[] sizes, int w, int h) {

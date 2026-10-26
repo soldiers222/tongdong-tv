@@ -1,6 +1,7 @@
 // 设备测试（Day-0）：摄像头、各识别引擎的速度、全身入镜，给出走路线 A 还是 B 的结论。
 import { feed } from '../pose/feed.js';
-import { openCamera, cameraErrorText } from '../pose/camera.js';
+import { openCamera, closeCamera, cameraOpen, cameraErrorText } from '../pose/camera.js';
+import * as native from '../pose/native.js';
 import { ENGINES, unsupportedReason, engineInfo } from '../pose/engines.js';
 import { Stage } from '../core/stage.js';
 import { drawSkeleton } from '../core/skeleton.js';
@@ -17,6 +18,11 @@ var FAST = qs('bench') === 'fast'; // 自动化测试用：缩短测速时间
 var WARM_MS = FAST ? 800 : 2500;
 var WARM_MAX_MS = FAST ? 60000 : 25000; // 预热最多等这么久（第一次识别可能要编译显卡程序）
 var MEASURE_MS = FAST ? 3000 : 10000;
+// ?engines=native,mn-wasm：只测这几个引擎（调试用）
+var ONLY = qs('engines') ? qs('engines').split(',') : null;
+function benchEngines() {
+  return ENGINES.filter(function (e) { return !ONLY || ONLY.indexOf(e.id) >= 0; });
+}
 
 var stage = null;
 var rafId = 0;
@@ -25,8 +31,9 @@ var benching = false;
 var renders = [];
 var lastPoseT = 0;
 var kpSamples = [];
-var camInfo = null;
+var camInfo = null;   // 网页摄像头
 var camFps = null;
+var nativeCam = null; // 原生摄像头（电视版 APK）
 var device = null;
 var results = [];
 var lastFit = null;
@@ -109,8 +116,9 @@ function setRow(id, cells, cls) {
 
 function buildTable() {
   var html = '';
-  for (var i = 0; i < ENGINES.length; i++) {
-    var e = ENGINES[i];
+  var list = benchEngines();
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
     var why = unsupportedReason(e.id);
     html += '<tr data-id="' + e.id + '"><td>' + e.label + '</td><td>' + (why ? '不可用' : '—') + '</td><td>' + (why ? why : '—') + '</td><td>—</td></tr>';
   }
@@ -157,7 +165,11 @@ function summaryText() {
   lines.push('童动乐园 设备测试结果（' + VERSION + '，' + stamp() + '）');
   lines.push('运行环境：' + (d.shell ? 'APK 外壳' + (d.native && d.native.app ? ' ' + d.native.app : '') : '浏览器') + (d.webview ? '，WebView ' + d.webview : (d.chrome ? '，Chrome ' + d.chrome : '')) + '，多线程' + (window.crossOriginIsolated ? '可用' : '不可用'));
   lines.push('设备：' + (d.model || '未知型号') + (d.native && d.native.harmony ? '，HarmonyOS ' + d.native.harmony : '') + (d.android ? '，Android ' + d.android : '') + '，' + (d.cores || '?') + ' 核' + (d.mem ? '，内存约 ' + d.mem + ' GB' : '') + '，图形 ' + d.gl);
-  lines.push('摄像头：' + (camInfo ? camInfo.label + '，' + camInfo.width + '×' + camInfo.height + (camFps ? '，实测 ' + camFps.toFixed(0) + ' 帧/秒' : '') : '未打开'));
+  if (nativeCam) {
+    var nf = native.info() || {};
+    lines.push('原生摄像头：' + nativeCam.label + '，识别 ' + nativeCam.width + '×' + nativeCam.height + (nativeCam.preview ? '，预览 ' + nativeCam.preview : '') + (nf.fpsRange ? '，帧率范围 ' + nf.fpsRange : '') + (nf.error ? '，上次出错：' + nf.error : ''));
+  }
+  lines.push((nativeCam ? '网页摄像头：' : '摄像头：') + (camInfo ? camInfo.label + '，' + camInfo.width + '×' + camInfo.height + (camFps ? '，实测 ' + camFps.toFixed(0) + ' 帧/秒' : '') : '未打开'));
   lines.push('画面：' + viewText());
   lines.push('识别测速（识别帧率 / 单帧耗时中位数 / 95 分位 / 画面帧率 / 平均关键点）：');
   for (var i = 0; i < results.length; i++) {
@@ -216,6 +228,60 @@ function withTimeout(p, ms, msg) {
   });
 }
 
+// 原生识别和网页摄像头不能同时占用摄像头：切换前先让出来
+function nativeView(on) {
+  if (!stage) return;
+  stage.transparentVideo = !!on;
+  if (on) native.previewOn($('d0-canvas'), 'contain', stage.mirror);
+  else native.previewOff();
+}
+
+function noteNativeCam() {
+  var ni = native.info() || {};
+  var eng = feed.engine || {};
+  nativeCam = {
+    label: 'Camera2 #' + (ni.camera || '?') + (ni.facing === 'front' ? ' 前置' : ' 后置') + (ni.level ? ' ' + ni.level : '') + (ni.rotation ? '（传感器转 ' + ni.rotation + '°）' : ''),
+    width: ni.w || eng.frameW,
+    height: ni.h || eng.frameH,
+    preview: ni.pw ? ni.pw + '×' + ni.ph : ''
+  };
+}
+
+function nativeCamText() {
+  var ni = native.info() || {};
+  return (ni.w ? ni.w + '×' + ni.h : '?') + '（原生）' + (ni.pw ? '，预览 ' + ni.pw + '×' + ni.ph : '');
+}
+
+async function startNative(my, onStatus) {
+  closeCamera($('cam'));
+  await feed.useEngine('native', onStatus);
+  if (my !== gen) return;
+  var eng = feed.engine;
+  stage.setVideoSize(eng.frameW, eng.frameH);
+  noteNativeCam();
+  nativeView(true);
+}
+
+async function ensureWebCamera(my) {
+  if (feed.engine && feed.engine.native) feed.release();
+  nativeView(false);
+  if (cameraOpen()) return true;
+  // 原生识别刚放开摄像头时，网页可能要等一下才打得开
+  for (var i = 0; i < 3; i++) {
+    try {
+      var info = await openCamera($('cam'));
+      if (my !== gen) return false;
+      camInfo = info;
+      stage.setVideoSize(info.width, info.height);
+      return true;
+    } catch (e) {
+      if (my !== gen) return false;
+      await sleep(800);
+    }
+  }
+  return false;
+}
+
 // 空载帧率：不跑识别时画面每秒能刷新几次（看电视本身画 4K 画面的能力）
 async function measureBase(my, ms) {
   var t0 = now();
@@ -254,18 +320,35 @@ async function runBench() {
   baseFps = b;
   $('d0-view').textContent = viewText();
   feed.yieldFrames = 1;
-  for (var i = 0; i < ENGINES.length; i++) {
+  var list = benchEngines();
+  for (var i = 0; i < list.length; i++) {
     if (my !== gen) return;
-    var e = ENGINES[i];
+    var e = list[i];
     var why = unsupportedReason(e.id);
     if (why) {
       results.push({ id: e.id, label: e.label, error: '不支持（' + why + '）' });
       continue;
     }
+    var isNative = e.kind === 'native';
     setRow(e.id, ['加载中', '—', '—'], 'running');
+    if (isNative) closeCamera($('cam'));
+    else {
+      var camOk = await ensureWebCamera(my);
+      if (my !== gen) return;
+      if (!camOk) {
+        results.push({ id: e.id, label: e.label, error: '网页摄像头打不开' });
+        setRow(e.id, ['失败', '网页摄像头打不开', '—']);
+        continue;
+      }
+    }
     var t0 = now();
     try {
       await withTimeout(feed.useEngine(e.id, function (txt) { setRow(e.id, [txt, '—', '—'], 'running'); }), 90000, '加载超时');
+      if (isNative && my === gen) {
+        stage.setVideoSize(feed.engine.frameW, feed.engine.frameH);
+        noteNativeCam();
+        nativeView(true);
+      }
     } catch (err) {
       if (my !== gen) return;
       var msg = (err && err.message ? err.message : String(err)).slice(0, 40);
@@ -286,7 +369,7 @@ async function runBench() {
     setRow(e.id, ['测量中', '—', '—'], 'running');
     await sleep(MEASURE_MS);
     if (my !== gen) return;
-    var st = feed.stats(MEASURE_MS);
+    var st = feed.stats(MEASURE_MS); // 原生识别的单帧耗时是安卓里实测的（见 feed.js）
     var rCount = 0;
     for (var k = 0; k < renders.length; k++) if (renders[k] > rStart) rCount++;
     var r = {
@@ -303,6 +386,10 @@ async function runBench() {
       errors: feed.errors
     };
     feed.stop();
+    if (isNative) {
+      feed.release();
+      nativeView(false);
+    }
     results.push(r);
     setRow(e.id, fmtRes(r));
   }
@@ -333,7 +420,11 @@ async function runBench() {
   // 用最快的引擎继续做全身入镜检查
   if (best) {
     try {
-      await feed.useEngine(best.id);
+      if (best.id === 'native') await startNative(my);
+      else {
+        await ensureWebCamera(my);
+        await feed.useEngine(best.id);
+      }
       if (my === gen) feed.start();
     } catch (e3) { /* ignore */ }
   }
@@ -388,7 +479,8 @@ export var day0Screen = {
     buildTable();
     showVerdict(null);
     restorePrevious();
-    if (!stage) stage = new Stage($('d0-canvas'));
+    if (!stage) stage = new Stage($('d0-canvas'), { alpha: native.available() });
+    stage.transparentVideo = false;
     stage.mirror = !!store.settings().mirror;
     stage.setFit('contain');
     device = deviceInfo();
@@ -412,21 +504,20 @@ export var day0Screen = {
     }
     $('d0-cam').innerHTML = '<span class="dot"></span>正在打开摄像头';
     var my = gen;
-    openCamera($('cam')).then(function (info) {
-      if (my !== gen) return;
-      camInfo = info;
-      stage.setVideoSize(info.width, info.height);
-      $('d0-cam').innerHTML = '<span class="dot ok"></span>' + info.width + '×' + info.height + '，测帧率中';
-      return measureCamFps($('cam'), 2000).then(function (f) {
+    // 电视版 APK：用原生摄像头和识别做实时预览
+    if (native.available()) {
+      startNative(my, null).then(function () {
         if (my !== gen) return;
-        camFps = f;
-        $('d0-cam').innerHTML = '<span class="dot ok"></span>' + info.width + '×' + info.height + '，' + Math.round(f) + ' 帧/秒';
+        $('d0-cam').innerHTML = '<span class="dot ok"></span>' + nativeCamText();
+        feed.start();
+      }).catch(function () {
+        if (my !== gen) return;
+        nativeView(false);
+        openWebPreview(my);
       });
-    }).catch(function (e) {
-      if (my !== gen) return;
-      $('d0-cam').innerHTML = '<span class="dot bad"></span>' + cameraErrorText(e);
-      $('d0-fit').textContent = '摄像头打不开，先按上面的提示处理';
-    });
+      return;
+    }
+    openWebPreview(my);
   },
   exit: function () {
     gen++;
@@ -434,9 +525,30 @@ export var day0Screen = {
     benching = false;
     feed.yieldFrames = 0;
     feed.stop();
+    if (feed.engine && feed.engine.native) feed.release();
+    nativeView(false);
     if (rafId) cancelAnimationFrame(rafId);
     rafId = 0;
     setInterceptor(null);
   },
   debug: function () { return { results: results, benching: benching, lastFit: lastFit, camInfo: camInfo, camFps: camFps, summary: summaryText() }; }
 };
+
+// 网页摄像头做实时预览（浏览器、或原生识别不可用时）
+function openWebPreview(my) {
+  openCamera($('cam')).then(function (info) {
+    if (my !== gen) return;
+    camInfo = info;
+    stage.setVideoSize(info.width, info.height);
+    $('d0-cam').innerHTML = '<span class="dot ok"></span>' + info.width + '×' + info.height + '，测帧率中';
+    return measureCamFps($('cam'), 2000).then(function (f) {
+      if (my !== gen) return;
+      camFps = f;
+      $('d0-cam').innerHTML = '<span class="dot ok"></span>' + info.width + '×' + info.height + '，' + Math.round(f) + ' 帧/秒';
+    });
+  }).catch(function (e) {
+    if (my !== gen) return;
+    $('d0-cam').innerHTML = '<span class="dot bad"></span>' + cameraErrorText(e);
+    $('d0-fit').textContent = '摄像头打不开，先按上面的提示处理';
+  });
+}

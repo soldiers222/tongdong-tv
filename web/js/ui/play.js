@@ -1,7 +1,8 @@
 // 运动页总控：摄像头 → 识别引擎 → 运动模式（切水果 / 金鸡独立）→ 结算 → 休息提醒
 import { Stage } from '../core/stage.js';
 import { feed } from '../pose/feed.js';
-import { openCamera, cameraErrorText } from '../pose/camera.js';
+import { openCamera, closeCamera, cameraErrorText } from '../pose/camera.js';
+import * as native from '../pose/native.js';
 import { unsupportedReason, engineInfo } from '../pose/engines.js';
 import * as store from '../core/store.js';
 import { setScope, setInterceptor } from '../core/nav.js';
@@ -33,9 +34,10 @@ export function engineOrder() {
   var s = store.settings();
   var order = [];
   if (s.engine && s.engine !== 'auto') order.push(s.engine);
+  else order.push('native'); // 电视版 APK：原生识别最快（网页版不支持，会被下面过滤掉）
   var d0 = store.get().day0;
   if (d0 && d0.best) order.push(d0.best);
-  order.push('mn-worker-gl', 'mp-lite', 'mn-webgl', 'mn-worker', 'mn-wasm', 'mp-full');
+  order.push('native', 'mn-worker-gl', 'mp-lite', 'mn-webgl', 'mn-worker', 'mn-wasm', 'mp-full');
   var out = [];
   for (var i = 0; i < order.length; i++) {
     if (out.indexOf(order[i]) < 0 && engineInfo(order[i]) && !unsupportedReason(order[i])) out.push(order[i]);
@@ -104,6 +106,10 @@ function stopAll() {
   if (unsub) unsub();
   unsub = null;
   feed.stop();
+  // 原生识别占着摄像头：离开运动页就停掉（升降摄像头会缩回去）
+  if (feed.engine && feed.engine.native) feed.release();
+  native.previewOff();
+  if (stage) stage.transparentVideo = false;
   flushActive();
   if (mode && mode.dispose) mode.dispose();
   mode = null;
@@ -117,7 +123,7 @@ async function start(name) {
   var my = token;
   modeName = name;
   var s = store.settings();
-  if (!stage) stage = new Stage($('stage'));
+  if (!stage) stage = new Stage($('stage'), { alpha: native.available() });
   stage.mirror = !!s.mirror;
   stage.setResolution(s.hd ? 1.5 : 1);
   env.stage = stage;
@@ -129,7 +135,28 @@ async function start(name) {
   // 先画一帧背景，避免黑屏
   stage.drawVideo(null, 0);
 
-  if (!feed.mock) {
+  var order = engineOrder();
+  var loaded = false, lastErr = null, usedNative = false;
+  // 原生识别优先：先把网页摄像头让出来，再启动安卓里的摄像头和识别
+  if (!feed.mock && order[0] === 'native') {
+    ui.loading('准备中', '正在启动识别…', [{ label: '回首页', fn: goHome }], goHome);
+    closeCamera($('cam'));
+    try {
+      await feed.useEngine('native', function (txt) { if (my === token) ui.loadingSub(txt + '…'); });
+      loaded = true;
+      usedNative = true;
+    } catch (e0) {
+      lastErr = e0;
+      if (window.console) console.warn('原生识别启动失败，改用网页识别', e0);
+    }
+    if (my !== token) return;
+  }
+  order = order.filter(function (id) { return id !== 'native'; });
+
+  if (usedNative) {
+    stage.setVideoSize(feed.engine.frameW, feed.engine.frameH);
+    stage.transparentVideo = true;
+  } else if (!feed.mock) {
     ui.loading('准备中', '正在打开摄像头…', [{ label: '回首页', fn: goHome }], goHome);
     try {
       var info = await openCamera($('cam'));
@@ -147,8 +174,6 @@ async function start(name) {
     stage.setVideoSize(1280, 720);
   }
 
-  var order = engineOrder();
-  var loaded = false, lastErr = null;
   for (var i = 0; i < order.length && !loaded; i++) {
     var label = (engineInfo(order[i]) || {}).label || order[i];
     ui.loading('准备中', '正在加载识别模型：' + label + '（第一次大约 10 到 30 秒）', [{ label: '回首页', fn: goHome }], goHome);
@@ -174,6 +199,7 @@ async function start(name) {
   }
 
   ui.hideLoading();
+  if (usedNative) native.previewOn($('stage'), stage.fit, stage.mirror);
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   setScope($('screen-play'));
   unsub = feed.on(function (p) { if (mode && !paused) mode.onPose(p); });

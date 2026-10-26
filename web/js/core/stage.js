@@ -6,9 +6,11 @@ export var H = 720;
 export var DISPLAY_FONT = '"TD Display", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif';
 export var BODY_FONT = '"HarmonyOS Sans SC", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif';
 
-export function Stage(canvas) {
+// alpha：电视版 APK 有原生识别时画布要能透明（摄像头画面在网页下层）
+export function Stage(canvas, opts) {
   this.canvas = canvas;
-  this.ctx = canvas.getContext('2d', { alpha: false });
+  this.ctx = canvas.getContext('2d', { alpha: !!(opts && opts.alpha) });
+  this.transparentVideo = false; // true：不画摄像头画面，留透明给下层的原生预览
   this.W = W;
   this.H = H;
   this.vw = W;
@@ -70,6 +72,19 @@ Stage.prototype.mapKp = function (kp) {
 
 Stage.prototype.drawVideo = function (video, dim) {
   var c = this.ctx;
+  if (this.transparentVideo) {
+    // 画面区域留透明给下层的原生预览；留边（contain 时的黑边）照常涂底色
+    c.fillStyle = '#0B1426';
+    c.fillRect(0, 0, W, H);
+    var x0 = Math.max(0, Math.ceil(this.ox)), y0 = Math.max(0, Math.ceil(this.oy));
+    var x1 = Math.min(W, Math.floor(this.ox + this.dw)), y1 = Math.min(H, Math.floor(this.oy + this.dh));
+    c.clearRect(x0, y0, x1 - x0, y1 - y0);
+    if (dim) {
+      c.fillStyle = 'rgba(8, 14, 28, ' + dim + ')';
+      c.fillRect(0, 0, W, H);
+    }
+    return;
+  }
   c.fillStyle = '#0B1426';
   c.fillRect(0, 0, W, H);
   if (video && video.videoWidth) {

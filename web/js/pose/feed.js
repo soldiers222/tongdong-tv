@@ -62,6 +62,7 @@ feed.on = function (fn) {
 };
 
 feed.resetStats = function () {
+  feed.statsFrom = now();
   feed.infer = [];
   feed.stamps = [];
   feed.errors = 0;
@@ -72,6 +73,8 @@ feed.resetStats = function () {
 feed.stats = function (windowMs) {
   var w = windowMs || 3000;
   var t = now();
+  // 刚开始识别不到 w 毫秒时按实际经过的时间算，不然刚开局会把快设备误判成慢设备
+  var span = Math.max(200, Math.min(w, t - (feed.statsFrom || 0)));
   var n = 0;
   for (var i = feed.stamps.length - 1; i >= 0; i--) {
     if (t - feed.stamps[i] <= w) n++;
@@ -79,7 +82,7 @@ feed.stats = function (windowMs) {
   }
   var recent = feed.infer.slice(-Math.max(1, n));
   return {
-    fps: n / (w / 1000),
+    fps: n / (span / 1000),
     p50: percentile(recent, 0.5),
     p95: percentile(recent, 0.95),
     n: n
@@ -88,6 +91,10 @@ feed.stats = function (windowMs) {
 
 feed.start = function () {
   if (feed.running) return;
+  // 识别帧率只算这次开始以后的（停过一阵再开始，不能把中间停的时间也算进去）
+  feed.statsFrom = now();
+  feed.stamps = [];
+  feed.infer = [];
   feed.running = true;
   feed.gen += 1;
   loop(feed.gen);
@@ -106,7 +113,8 @@ async function loop(gen) {
     if (!eng) { await sleep(60); continue; }
     var v = feed.video;
     var mock = !!feed.mock;
-    if (!mock) {
+    var nat = eng.usesVideo === false; // 原生识别不用网页的摄像头
+    if (!mock && !nat) {
       if (!v || v.readyState < 2 || !v.videoWidth) { await raf(); continue; }
       if (v.currentTime === lastTime) { await raf(); continue; }
       lastTime = v.currentTime;
@@ -114,7 +122,7 @@ async function loop(gen) {
     var t0 = now();
     var kp = null;
     try {
-      kp = await eng.estimate(mock ? null : v, t0);
+      kp = await eng.estimate(mock || nat ? null : v, t0);
     } catch (e) {
       feed.errors += 1;
       feed.lastError = e;
@@ -124,21 +132,23 @@ async function loop(gen) {
     }
     if (gen !== feed.gen) break;
     var t1 = now();
-    feed.infer.push(t1 - t0);
+    // 原生识别：这边量到的是等下一组关键点的时间，单帧耗时用安卓里实测的
+    feed.infer.push(nat && eng.lastMs != null ? eng.lastMs : t1 - t0);
     keepLast(feed.infer, 400);
     feed.stamps.push(t1);
     keepLast(feed.stamps, 400);
     feed.latest = {
       kp: kp,
-      t: t0,
+      t: nat && eng.captureTime != null ? eng.captureTime : t0, // 画面拍下的时间，用来做延迟补偿
       t1: t1,
-      w: mock ? 1280 : v.videoWidth,
-      h: mock ? 720 : v.videoHeight
+      w: nat ? eng.frameW : (mock ? 1280 : v.videoWidth),
+      h: nat ? eng.frameH : (mock ? 720 : v.videoHeight)
     };
     for (var i = 0; i < feed.listeners.length; i++) {
       try { feed.listeners[i](feed.latest); } catch (e2) { if (window.console) console.error(e2); }
     }
-    var frames = feed.yieldFrames > 0 ? feed.yieldFrames : (eng.mainThread ? 2 : 1);
+    // 原生识别不占网页主线程，不用让画面；关键点来了就送出去
+    var frames = nat ? 0 : (feed.yieldFrames > 0 ? feed.yieldFrames : (eng.mainThread ? 2 : 1));
     for (var k = 0; k < frames && feed.running && gen === feed.gen; k++) await raf();
   }
 }

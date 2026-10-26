@@ -104,7 +104,8 @@ public class MainActivity extends Activity {
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
         root = new FrameLayout(this);
-        root.setBackgroundColor(Color.rgb(0xB5, 0x44, 0x3A));
+        // 黑底：网页透明的地方（原生摄像头画面还没出来时）露出来的是黑色
+        root.setBackgroundColor(Color.BLACK);
         // 摄像头预览层：平时 1×1 像素藏在网页后面（保持可见，系统才会创建画面缓冲）
         preview = new TextureView(this);
         preview.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
@@ -213,7 +214,8 @@ public class MainActivity extends Activity {
             float w = (float) o.optDouble("w", 0) * d, h = (float) o.optDouble("h", 0) * d;
             if (w < 2 || h < 2) return;
             boolean cover = "cover".equals(o.optString("fit", "cover"));
-            boolean mirror = o.optBoolean("mirror", true);
+            // 前置摄像头的预览系统已经左右翻过一次，再按网页的要求翻
+            boolean mirror = o.optBoolean("mirror", true) != pose.isPreviewMirrored();
             float bw = ps.getWidth(), bh = ps.getHeight();
             float vx = x, vy = y, vw = w, vh = h;
             Matrix m = new Matrix();

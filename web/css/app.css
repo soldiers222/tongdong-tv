@@ -457,3 +457,15 @@ button {
 
 #cam { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; left: 0; top: 0; }
 
+
+/* ---------- 原生识别（电视版 APK）：摄像头画面在网页下层，对应区域做成透明 ---------- */
+html.native-cam, body.native-cam { background: transparent !important; }
+body.native-cam #screen-play { background: transparent; }
+/* 设备测试：整页背景改由预览框的大阴影来画，框里留空给摄像头画面 */
+body.native-cam #screen-day0 { background: transparent; }
+body.native-cam .d0-preview { background: transparent; box-shadow: 0 0 0 4000px var(--night); z-index: 0; }
+body.native-cam #screen-day0 .page-head,
+body.native-cam .d0-live,
+body.native-cam .d0-side,
+body.native-cam .d0-actions,
+body.native-cam .summary { z-index: 1; }
