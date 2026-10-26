@@ -80,9 +80,23 @@ jobs:
 
           两个文件内容一样，带版本号的那个方便区分。
           EOF
-          gh release delete tv-latest --yes --cleanup-tag || true
-          gh release create tv-latest dist/*.apk \
-            --target "$GITHUB_SHA" \
-            --title "电视版 ${V}（第 ${GITHUB_RUN_NUMBER} 次构建）" \
-            --notes-file notes.md \
-            --latest
+          # 出错时把原因写成注解，在 Actions 页面和 API 里都能看到
+          fail() { echo "::error title=发布失败::$(printf '%s' "$1" | tr '\n' ' ' | cut -c1-900)"; exit 1; }
+          T="电视版 ${V}（第 ${GITHUB_RUN_NUMBER} 次构建）"
+          # 1. 固定标签 tv-latest 移到这次的代码（不删发布，下载地址一直有效）
+          git tag -f tv-latest "$GITHUB_SHA"
+          out=$(git push -f origin refs/tags/tv-latest 2>&1) || fail "推送标签失败：$out"
+          # 2. 已有发布（包括上次没发出去的草稿）就更新文件和说明，没有就新建
+          if gh release view tv-latest >/dev/null 2>&1; then
+            out=$(gh release upload tv-latest dist/*.apk --clobber 2>&1) || fail "上传失败：$out"
+            out=$(gh release edit tv-latest --title "$T" --notes-file notes.md --draft=false --latest 2>&1) || fail "更新发布失败：$out"
+          else
+            out=$(gh release create tv-latest dist/*.apk --verify-tag --title "$T" --notes-file notes.md --latest 2>&1) || fail "创建发布失败：$out"
+          fi
+          # 3. 删掉以前构建留下的带版本号的旧文件
+          gh release view tv-latest --json assets --jq '.assets[].name' | while read -r a; do
+            case "$a" in
+              tongdong-tv.apk|"tongdong-tv-${V}-build${GITHUB_RUN_NUMBER}.apk") ;;
+              *) gh release delete-asset tv-latest "$a" -y || true ;;
+            esac
+          done
