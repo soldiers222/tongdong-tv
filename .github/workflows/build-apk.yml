@@ -36,6 +36,37 @@ jobs:
           gradle-version: '8.9'
           cache-provider: basic   # 用开源的 GitHub Actions 缓存
 
+      - name: 缓存识别模型
+        uses: actions/cache@v6
+        with:
+          path: android/app/src/main/assets/models
+          key: movenet-singlepose-lightning-tflite-int8-v4
+
+      - name: 下载识别模型（MoveNet Lightning，TensorFlow Lite）
+        run: |
+          f=android/app/src/main/assets/models/movenet_lightning_int8.tflite
+          mkdir -p "$(dirname "$f")"
+          magic() { dd if="$1" bs=1 skip=4 count=4 2>/dev/null; }
+          if [ ! -s "$f" ] || [ "$(magic "$f")" != "TFL3" ]; then
+            rm -f "$f"
+            curl -fL --retry 3 -o "$f" "https://tfhub.dev/google/lite-model/movenet/singlepose/lightning/tflite/int8/4?lite-format=tflite" || true
+          fi
+          if [ ! -s "$f" ] || [ "$(magic "$f")" != "TFL3" ]; then
+            echo "TF Hub 下载失败，改从 Kaggle 下载"
+            rm -f "$f"
+            mkdir -p /tmp/movenet
+            curl -fL --retry 3 -o /tmp/movenet/m.tar.gz "https://www.kaggle.com/api/v1/models/google/movenet/tfLite/singlepose-lightning-tflite-int8/1/download" || true
+            tar -xzf /tmp/movenet/m.tar.gz -C /tmp/movenet 2>/dev/null || true
+            m=$(find /tmp/movenet -name '*.tflite' | head -1)
+            [ -n "$m" ] && cp "$m" "$f"
+          fi
+          if [ ! -s "$f" ] || [ "$(magic "$f")" != "TFL3" ]; then
+            echo "::error title=模型下载失败::没拿到有效的 MoveNet TFLite 文件，原生识别不可用"
+            exit 1
+          fi
+          ls -la "$f"
+          sha256sum "$f"
+
       - name: 构建
         working-directory: android
         run: |

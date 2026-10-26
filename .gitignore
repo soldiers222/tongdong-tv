@@ -8,3 +8,5 @@ tools/fonts/*.otf
 *.jks
 !android/app/debug.keystore
 .DS_Store
+# 原生识别模型由 CI 下载
+android/app/src/main/assets/models/

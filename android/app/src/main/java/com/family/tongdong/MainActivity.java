@@ -8,11 +8,15 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Matrix;
+import android.graphics.SurfaceTexture;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.Size;
 import android.view.KeyEvent;
+import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -45,6 +49,8 @@ import java.util.Map;
  * - 返回键先交给网页（window.__tdBack），网页说已在首页时，再按一次退出。
  * - 菜单键：重新加载、在「内置版本」和「网页版地址」之间切换。
  * - 切到后台时通知网页（window.__tdPause）马上关摄像头，升降摄像头会缩回去。
+ * - 原生识别（PoseEngine）：摄像头和 MoveNet 都在安卓里跑，关键点通过 window.__tdNativePose 交给网页；
+ *   摄像头画面显示在网页下层的 TextureView 里，网页把对应区域做成透明。
  */
 public class MainActivity extends Activity {
     private static final String HOST = "appassets.androidplatform.net";
@@ -55,6 +61,9 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private FrameLayout root;
+    private TextureView preview;
+    private volatile SurfaceTexture previewTexture;
+    private PoseEngine pose;
     private PermissionRequest pendingRequest;
     private long lastBackAt;
     private boolean stopped;
@@ -70,7 +79,8 @@ public class MainActivity extends Activity {
         }
 
         web = new WebView(this);
-        web.setBackgroundColor(Color.rgb(0xB5, 0x44, 0x3A));
+        // 透明：原生识别时摄像头画面在网页下层，网页把画面区域做成透明（其他页面都有自己的背景色）
+        web.setBackgroundColor(Color.TRANSPARENT);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -95,35 +105,139 @@ public class MainActivity extends Activity {
         web.setFocusableInTouchMode(true);
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(0xB5, 0x44, 0x3A));
-        root.addView(web, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        root.addOnLayoutChangeListener((v, left, top, right, bottom, ol, ot, or, ob) -> {
-            final int w = right - left, h = bottom - top;
-            if (lowRes() && w > 0 && h > 0) root.post(() -> applyLowRes(w, h));
+        // 摄像头预览层：平时 1×1 像素藏在网页后面（保持可见，系统才会创建画面缓冲）
+        preview = new TextureView(this);
+        preview.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int h) {
+                previewTexture = st;
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(SurfaceTexture st, int w, int h) {
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture st) {
+                previewTexture = null;
+                return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(SurfaceTexture st) {
+            }
         });
+        root.addView(preview, new FrameLayout.LayoutParams(1, 1));
+        root.addView(web, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         setContentView(root);
         hideSystemUi();
         web.requestFocus();
         web.loadUrl(startUrl());
     }
 
-    // ---------- 实验：低分辨率渲染 ----------
-    // 网页按屏幕一半的分辨率渲染，再整体放大 2 倍铺满屏幕。4K 电视上显卡要画的像素少四分之三，
-    // 画面和识别可能都更快；代价是字和线条略微发虚。默认关，按菜单键打开。
+    // ---------- 原生识别：摄像头 + MoveNet ----------
 
-    private boolean lowRes() {
-        return prefs().getBoolean("lowRes", false);
+    private PoseEngine pose() {
+        if (pose == null) {
+            pose = new PoseEngine(this, new PoseEngine.Listener() {
+                @Override
+                public void onPose(String json) {
+                    runOnUiThread(() -> {
+                        if (web != null) web.evaluateJavascript("window.__tdNativePose&&window.__tdNativePose(" + json + ")", null);
+                    });
+                }
+
+                @Override
+                public void onError(String message) {
+                    runOnUiThread(() -> {
+                        if (web != null) web.evaluateJavascript("window.__tdNativeError&&window.__tdNativeError(" + JSONObject.quote(message) + ")", null);
+                    });
+                }
+            });
+        }
+        return pose;
     }
 
-    private void applyLowRes(int w, int h) {
-        if (web == null) return;
-        android.view.ViewGroup.LayoutParams lp = web.getLayoutParams();
-        if (lp.width == w / 2 && lp.height == h / 2) return;
-        web.setLayoutParams(new FrameLayout.LayoutParams(w / 2, h / 2));
-        web.setPivotX(0f);
-        web.setPivotY(0f);
-        web.setScaleX(2f);
-        web.setScaleY(2f);
-        web.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+    private String poseStart() {
+        try {
+            if (!PoseEngine.available(this)) return result(false, "这个安装包里没有原生识别模型");
+            if (!hasCamera()) {
+                runOnUiThread(() -> {
+                    askingPermission = true;
+                    requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
+                });
+                return result(false, "permission");
+            }
+            SurfaceTexture st = previewTexture;
+            if (st == null) return result(false, "preview");
+            PoseEngine p = pose();
+            String why = p.start(st);
+            if (why != null) return result(false, why);
+            JSONObject o = new JSONObject();
+            o.put("ok", true);
+            Size a = p.getAnalysisSize();
+            if (a != null) {
+                o.put("w", a.getWidth());
+                o.put("h", a.getHeight());
+            }
+            return o.toString();
+        } catch (Exception e) {
+            return result(false, String.valueOf(e.getMessage()));
+        }
+    }
+
+    private static String result(boolean ok, String error) {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("ok", ok);
+            if (error != null) o.put("error", error);
+            return o.toString();
+        } catch (Exception e) {
+            return "{\"ok\":false}";
+        }
+    }
+
+    /** 网页告诉我们预览要放在哪（CSS 像素）、怎么铺（cover 裁满 / contain 留边）、要不要镜像 */
+    private void layoutPreview(String json) {
+        try {
+            JSONObject o = new JSONObject(json);
+            boolean show = o.optBoolean("show", false);
+            Size ps = pose == null ? null : pose.getPreviewSize();
+            if (!show || ps == null) {
+                preview.setLayoutParams(new FrameLayout.LayoutParams(1, 1));
+                preview.setTransform(null);
+                return;
+            }
+            float d = getResources().getDisplayMetrics().density;
+            float x = (float) o.optDouble("x", 0) * d, y = (float) o.optDouble("y", 0) * d;
+            float w = (float) o.optDouble("w", 0) * d, h = (float) o.optDouble("h", 0) * d;
+            if (w < 2 || h < 2) return;
+            boolean cover = "cover".equals(o.optString("fit", "cover"));
+            boolean mirror = o.optBoolean("mirror", true);
+            float bw = ps.getWidth(), bh = ps.getHeight();
+            float vx = x, vy = y, vw = w, vh = h;
+            Matrix m = new Matrix();
+            if (cover) {
+                // 视图铺满目标区域，画面按比例放大后裁掉多出来的部分
+                float s = Math.max(w / bw, h / bh);
+                m.setScale(bw * s / w, bh * s / h, w / 2f, h / 2f);
+            } else {
+                // 视图缩到和画面同样的宽高比，放在目标区域正中
+                float s = Math.min(w / bw, h / bh);
+                vw = bw * s;
+                vh = bh * s;
+                vx = x + (w - vw) / 2f;
+                vy = y + (h - vh) / 2f;
+            }
+            if (mirror) m.postScale(-1f, 1f, vw / 2f, vh / 2f);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(Math.round(vw), Math.round(vh));
+            lp.leftMargin = Math.round(vx);
+            lp.topMargin = Math.round(vy);
+            preview.setLayoutParams(lp);
+            preview.setTransform(m);
+        } catch (Exception ignored) {
+            // 参数不对就不动
+        }
     }
 
     // ---------- 生命周期：切到后台就关摄像头 ----------
@@ -145,12 +259,17 @@ public class MainActivity extends Activity {
             stopped = true;
             web.evaluateJavascript("window.__tdPause && window.__tdPause()", null);
             web.onPause();
+            if (pose != null) pose.stop();
         }
         super.onStop();
     }
 
     @Override
     protected void onDestroy() {
+        if (pose != null) {
+            pose.close();
+            pose = null;
+        }
         if (web != null) {
             web.destroy();
             web = null;
@@ -242,7 +361,6 @@ public class MainActivity extends Activity {
                 (onCustom ? "" : "✓ ") + "使用内置版本（不用联网，推荐）",
                 (onCustom ? "✓ " : "") + "使用网页版" + (custom.length() > 0 ? "：" + custom : "（先设置地址）"),
                 "设置网页版地址…",
-                "低分辨率渲染（实验）：" + (lowRes() ? "已开，选这里关闭" : "已关，选这里打开"),
                 "退出童动乐园"
         };
         new AlertDialog.Builder(this)
@@ -254,10 +372,7 @@ public class MainActivity extends Activity {
                         if (custom.length() > 0) useCustom(custom);
                         else askUrl();
                     } else if (which == 3) askUrl();
-                    else if (which == 4) {
-                        prefs().edit().putBoolean("lowRes", !lowRes()).apply();
-                        recreate();
-                    } else if (which == 5) finish();
+                    else if (which == 4) finish();
                 })
                 .show();
     }
@@ -424,6 +539,44 @@ public class MainActivity extends Activity {
 
     public class NativeBridge {
         @JavascriptInterface
+        public boolean poseAvailable() {
+            return PoseEngine.available(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public boolean hasCameraPermission() {
+            return hasCamera();
+        }
+
+        @JavascriptInterface
+        public String poseStart(String options) {
+            return MainActivity.this.poseStart();
+        }
+
+        @JavascriptInterface
+        public void poseStop() {
+            if (pose != null) pose.stop();
+            runOnUiThread(() -> layoutPreview("{\"show\":false}"));
+        }
+
+        @JavascriptInterface
+        public String poseInfo() {
+            PoseEngine p = pose();
+            if (p.getAnalysisSize() == null) p.prepare();
+            return p.infoJson();
+        }
+
+        @JavascriptInterface
+        public String cameraSizes() {
+            return PoseEngine.sizesJson(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void preview(String json) {
+            runOnUiThread(() -> layoutPreview(json));
+        }
+
+        @JavascriptInterface
         public String info() {
             JSONObject o = new JSONObject();
             try {
@@ -437,7 +590,7 @@ public class MainActivity extends Activity {
                 o.put("app", appVersion());
                 o.put("webview", webViewVersion());
                 o.put("cameraPermission", hasCamera());
-                o.put("lowRes", lowRes());
+                o.put("nativePose", PoseEngine.available(MainActivity.this));
             } catch (Exception ignored) {
                 // 拿不到的字段就空着
             }

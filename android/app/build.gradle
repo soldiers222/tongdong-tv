@@ -28,6 +28,10 @@ android {
         targetSdk 34
         versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger())
         versionName webVersion
+        // 电视和手机都是 ARM，只打包这两种，安装包小一些
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
     }
 
     // 固定的调试证书（仓库里的 debug.keystore，密码是安卓惯例的 android）。
@@ -61,6 +65,11 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+dependencies {
+    // 原生姿态识别（MoveNet）。模型文件由 CI 下载到 src/main/assets/models/，不进仓库
+    implementation 'org.tensorflow:tensorflow-lite:2.16.1'
 }
 
 tasks.named('preBuild') { dependsOn syncWebAssets }
