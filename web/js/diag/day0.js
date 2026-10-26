@@ -155,7 +155,7 @@ function summaryText() {
   var d = device || deviceInfo();
   var lines = [];
   lines.push('童动乐园 设备测试结果（' + VERSION + '，' + stamp() + '）');
-  lines.push('运行环境：' + (d.shell ? 'APK 外壳' + (d.native && d.native.app ? ' ' + d.native.app : '') : '浏览器') + (d.webview ? '，WebView ' + d.webview : (d.chrome ? '，Chrome ' + d.chrome : '')));
+  lines.push('运行环境：' + (d.shell ? 'APK 外壳' + (d.native && d.native.app ? ' ' + d.native.app : '') : '浏览器') + (d.webview ? '，WebView ' + d.webview : (d.chrome ? '，Chrome ' + d.chrome : '')) + '，多线程' + (window.crossOriginIsolated ? '可用' : '不可用'));
   lines.push('设备：' + (d.model || '未知型号') + (d.native && d.native.harmony ? '，HarmonyOS ' + d.native.harmony : '') + (d.android ? '，Android ' + d.android : '') + '，' + (d.cores || '?') + ' 核' + (d.mem ? '，内存约 ' + d.mem + ' GB' : '') + '，图形 ' + d.gl);
   lines.push('摄像头：' + (camInfo ? camInfo.label + '，' + camInfo.width + '×' + camInfo.height + (camFps ? '，实测 ' + camFps.toFixed(0) + ' 帧/秒' : '') : '未打开'));
   lines.push('画面：' + viewText());
@@ -163,7 +163,7 @@ function summaryText() {
   for (var i = 0; i < results.length; i++) {
     var r = results[i];
     if (r.error) lines.push('  ' + r.label + '：' + r.error);
-    else lines.push('  ' + r.label + '：' + r.fps.toFixed(1) + ' 帧/秒，' + Math.round(r.p50) + ' / ' + Math.round(r.p95) + ' 毫秒，画面 ' + Math.round(r.renderFps) + ' 帧/秒，' + r.kpAvg.toFixed(1) + ' 点，加载 ' + (r.loadMs / 1000).toFixed(1) + ' 秒' + (r.grabMs ? '，取帧 ' + Math.round(r.grabMs) + ' 毫秒' : ''));
+    else lines.push('  ' + r.label + '：' + r.fps.toFixed(1) + ' 帧/秒，' + Math.round(r.p50) + ' / ' + Math.round(r.p95) + ' 毫秒，画面 ' + Math.round(r.renderFps) + ' 帧/秒，' + r.kpAvg.toFixed(1) + ' 点，加载 ' + (r.loadMs / 1000).toFixed(1) + ' 秒' + (r.grabMs ? '，取帧 ' + Math.round(r.grabMs) + ' 毫秒' : '') + (r.threads > 1 ? '，' + r.threads + ' 线程' : ''));
   }
   var best = pickBest(results);
   var v = verdictFor(best);
@@ -176,7 +176,7 @@ function summaryText() {
 function previewLoop(t) {
   if (!active) return;
   renders.push(t);
-  keepLast(renders, 200);
+  keepLast(renders, 2000); // 测速一次 10 秒，60 帧/秒要 600 条；原来只留 200 条，最多只能算出 20 帧/秒
   var st = stage, c = st.ctx;
   if (feed.mock) st.drawMockBackground();
   else st.drawVideo($('cam'), 0);
@@ -299,6 +299,7 @@ async function runBench() {
       kpAvg: kpSamples.length ? mean(kpSamples) : 0,
       loadMs: loadMs,
       grabMs: feed.engine && feed.engine.grabMs ? feed.engine.grabMs : null,
+      threads: feed.engine && feed.engine.threads ? feed.engine.threads : null,
       errors: feed.errors
     };
     feed.stop();
@@ -326,7 +327,7 @@ async function runBench() {
     camera: camInfo,
     camFps: camFps,
     results: results.map(function (x) {
-      return { id: x.id, fps: x.fps || 0, p50: x.p50 || 0, p95: x.p95 || 0, renderFps: x.renderFps || 0, kpAvg: x.kpAvg || 0, grabMs: x.grabMs || null, error: x.error || null };
+      return { id: x.id, fps: x.fps || 0, p50: x.p50 || 0, p95: x.p95 || 0, renderFps: x.renderFps || 0, kpAvg: x.kpAvg || 0, grabMs: x.grabMs || null, threads: x.threads || null, error: x.error || null };
     })
   });
   // 用最快的引擎继续做全身入镜检查
@@ -359,7 +360,7 @@ function restorePrevious() {
     var r = d0.results[i];
     var info = engineInfo(r.id);
     if (!info) continue;
-    var full = { id: r.id, label: info.label, fps: r.fps, p50: r.p50, p95: r.p95, renderFps: r.renderFps, kpAvg: r.kpAvg, loadMs: 0, grabMs: r.grabMs || null, error: r.error };
+    var full = { id: r.id, label: info.label, fps: r.fps, p50: r.p50, p95: r.p95, renderFps: r.renderFps, kpAvg: r.kpAvg, loadMs: 0, grabMs: r.grabMs || null, threads: r.threads || null, error: r.error };
     results.push(full);
     setRow(r.id, fmtRes(full), r.id === d0.best ? 'best' : '');
   }
@@ -391,7 +392,7 @@ export var day0Screen = {
     stage.mirror = !!store.settings().mirror;
     stage.setFit('contain');
     device = deviceInfo();
-    $('d0-env').textContent = device.shell ? 'APK 外壳' + (device.webview ? '，WebView ' + device.webview : '') : '浏览器' + (device.chrome ? '，Chrome ' + device.chrome : '');
+    $('d0-env').textContent = (device.shell ? 'APK 外壳' + (device.webview ? '，WebView ' + device.webview : '') : '浏览器' + (device.chrome ? '，Chrome ' + device.chrome : '')) + (window.crossOriginIsolated ? '，多线程可用' : '');
     var gl = String(device.gl);
     $('d0-dev').textContent = (device.model || '未知型号') + '，' + (device.cores || '?') + ' 核，' + (gl.length > 34 ? gl.slice(0, 33) + '…' : gl);
     $('d0-view').textContent = viewText();

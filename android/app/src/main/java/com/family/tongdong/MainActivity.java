@@ -353,8 +353,7 @@ public class MainActivity extends Activity {
             InputStream in = getAssets().open(rel);
             String mime = mimeOf(rel);
             boolean text = mime.startsWith("text/") || mime.endsWith("json") || mime.endsWith("+xml");
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Access-Control-Allow-Origin", "*");
+            Map<String, String> headers = isolationHeaders();
             headers.put("Cache-Control", "no-cache");
             return new WebResourceResponse(mime, text ? "utf-8" : null, 200, "OK", headers, in);
         } catch (IOException e) {
@@ -363,10 +362,17 @@ public class MainActivity extends Activity {
     }
 
     private static WebResourceResponse notFound() {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Access-Control-Allow-Origin", "*");
-        return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found", headers,
+        return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found", isolationHeaders(),
                 new ByteArrayInputStream(new byte[0]));
+    }
+
+    // 跨源隔离：网页里才能用 SharedArrayBuffer，后台识别可以多线程跑（所有文件都是同源的，不受影响）
+    private static Map<String, String> isolationHeaders() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Cross-Origin-Opener-Policy", "same-origin");
+        headers.put("Cross-Origin-Embedder-Policy", "require-corp");
+        headers.put("Cross-Origin-Resource-Policy", "same-origin");
+        return headers;
     }
 
     private static String mimeOf(String name) {

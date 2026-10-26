@@ -3,9 +3,10 @@
 //   FAKE_CAMERA 可选：提供一段 y4m 全身视频（见 make-fixture.py）时，会用真实识别模型跑设备测试。
 //   CHROME 可选：Chrome 路径，默认 /opt/google/chrome/chrome。
 import puppeteer from 'puppeteer-core';
-import { spawn } from 'node:child_process';
+import http from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, extname, normalize } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const WEB = join(ROOT, 'web');
@@ -23,11 +24,26 @@ function check(name, cond, detail) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1', '--directory', WEB], { stdio: 'ignore' });
-for (let i = 0; i < 50; i++) {
-  try { const r = await fetch(BASE + '/index.html'); if (r.ok) break; } catch (e) { /* wait */ }
-  await sleep(100);
-}
+// 静态服务器。默认带跨源隔离响应头，和电视版 APK 一样（ISOLATE=0 时不带，和网页版一样）
+const ISOLATE = process.env.ISOLATE !== '0';
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.txt': 'text/plain' };
+const server = http.createServer(async (req, res) => {
+  let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  if (p.endsWith('/')) p += 'index.html';
+  const file = normalize(join(WEB, p));
+  const headers = ISOLATE ? { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp', 'Cross-Origin-Resource-Policy': 'same-origin' } : {};
+  if (!file.startsWith(WEB)) { res.writeHead(403, headers); res.end(); return; }
+  try {
+    const data = await readFile(file);
+    res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream', ...headers });
+    res.end(data);
+  } catch (e) {
+    res.writeHead(404, headers);
+    res.end();
+  }
+});
+await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
+console.log('跨源隔离：' + (ISOLATE ? '开（同电视版 APK）' : '关（同网页版）'));
 
 const args = [
   '--no-sandbox', '--autoplay-policy=no-user-gesture-required',
@@ -215,7 +231,7 @@ try {
   check('测试脚本执行', false, e && e.stack ? e.stack : String(e));
 } finally {
   await browser.close();
-  server.kill();
+  server.close();
 }
 
 writeFileSync(join(OUT, 'results.json'), JSON.stringify(results, null, 2));

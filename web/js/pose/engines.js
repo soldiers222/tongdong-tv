@@ -202,7 +202,7 @@ MoveNetWorkerEngine.prototype.init = function (onStatus) {
     w.onmessage = function (e) {
       var m = e.data || {};
       if (m.type === 'status' && onStatus) onStatus(m.text);
-      else if (m.type === 'ready') { clearTimeout(timer); resolve(); }
+      else if (m.type === 'ready') { clearTimeout(timer); self.threads = m.threads || 1; self.workerInfo = m; resolve(); }
       else if (m.type === 'error') {
         clearTimeout(timer);
         if (self.pending) { self.pending.reject(new Error(m.message)); self.pending = null; }

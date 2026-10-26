@@ -17,7 +17,13 @@ function init(base, backend) {
     post({ type: 'error', message: '运行库加载失败：' + (e && e.message ? e.message : e) });
     return;
   }
-  if (!gpu) tf.wasm.setWasmPaths(base + 'vendor/tfjs/');
+  if (!gpu) {
+    tf.wasm.setWasmPaths(base + 'vendor/tfjs/');
+    // 跨源隔离时可以用多线程（SharedArrayBuffer），最多 4 个线程，给画面留出核心
+    if (self.crossOriginIsolated && tf.wasm.setThreadsCount) {
+      tf.wasm.setThreadsCount(Math.max(1, Math.min(4, (self.navigator && navigator.hardwareConcurrency) || 4)));
+    }
+  }
   tf.setBackend(gpu ? 'webgl' : 'wasm').then(function (ok) {
     if (ok === false) throw new Error(gpu ? '后台线程不能用 GPU' : 'WASM 后端不可用');
     return tf.ready();
@@ -37,7 +43,16 @@ function init(base, backend) {
     });
   }).then(function (d) {
     detector = d;
-    post({ type: 'ready', backend: tf.getBackend() });
+    var threads = 1;
+    try { if (!gpu && tf.wasm.getThreadsCount) threads = tf.wasm.getThreadsCount(); } catch (e) { threads = 1; }
+    return Promise.all([
+      tf.env().getAsync('WASM_HAS_SIMD_SUPPORT').catch(function () { return null; }),
+      tf.env().getAsync('WASM_HAS_MULTITHREAD_SUPPORT').catch(function () { return null; })
+    ]).then(function (f) {
+      post({ type: 'ready', backend: tf.getBackend(), threads: threads, isolated: !!self.crossOriginIsolated,
+        sab: typeof SharedArrayBuffer !== 'undefined', simd: f[0], mt: f[1],
+        cores: (self.navigator && navigator.hardwareConcurrency) || null });
+    });
   }).catch(function (e) {
     post({ type: 'error', message: 'MoveNet 初始化失败：' + (e && e.message ? e.message : e) });
   });

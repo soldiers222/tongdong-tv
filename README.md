@@ -92,7 +92,7 @@ cd web && python3 -m http.server 8000     # 打开 http://localhost:8000
 cd tests && npm ci
 node syntax-check.mjs                     # 只允许 ES2017 语法，照顾老电视浏览器
 node --test unit/*.test.mjs               # 切水果、金鸡独立的判定逻辑
-node e2e.mjs                              # 无头 Chrome 跑完整流程（CHROME= 指定 Chrome 路径）
+node e2e.mjs                              # 无头 Chrome 跑完整流程（CHROME= 指定 Chrome 路径；默认带跨源隔离头，同 APK，ISOLATE=0 同网页版）
 FAKE_CAMERA=person.y4m node e2e.mjs       # 加上假摄像头视频，连真实识别模型一起测（见 make-fixture.py）
 ```
 
