@@ -32,12 +32,16 @@ var results = [];
 var lastFit = null;
 var showSummary = false;
 var gen = 0; // 每次进入或离开页面加 1；进行中的测速看到编号变了就停下，不会在后台继续跑
+var baseFps = null; // 不识别时画面每秒刷新几次（空载帧率）
 
 function viewText() {
   var v = window.TD && window.TD.view ? window.TD.view() : null;
   if (!v) return '';
+  var d = device || {};
   return v.w + '×' + v.h + '，像素比 ' + (Math.round(v.dpr * 100) / 100) + '，缩放 ' + v.s.toFixed(3) +
-    (Math.abs(v.zoom - 1) > 0.01 ? '，页面被放大 ' + v.zoom.toFixed(2) + ' 倍' : '');
+    (Math.abs(v.zoom - 1) > 0.01 ? '，页面被放大 ' + v.zoom.toFixed(2) + ' 倍' : '') +
+    (d.native && d.native.lowRes ? '，低分辨率渲染' : '') +
+    (baseFps !== null ? '，空载 ' + Math.round(baseFps) + ' 帧/秒' : '');
 }
 
 function deviceInfo() {
@@ -159,7 +163,7 @@ function summaryText() {
   for (var i = 0; i < results.length; i++) {
     var r = results[i];
     if (r.error) lines.push('  ' + r.label + '：' + r.error);
-    else lines.push('  ' + r.label + '：' + r.fps.toFixed(1) + ' 帧/秒，' + Math.round(r.p50) + ' / ' + Math.round(r.p95) + ' 毫秒，画面 ' + Math.round(r.renderFps) + ' 帧/秒，' + r.kpAvg.toFixed(1) + ' 点，加载 ' + (r.loadMs / 1000).toFixed(1) + ' 秒');
+    else lines.push('  ' + r.label + '：' + r.fps.toFixed(1) + ' 帧/秒，' + Math.round(r.p50) + ' / ' + Math.round(r.p95) + ' 毫秒，画面 ' + Math.round(r.renderFps) + ' 帧/秒，' + r.kpAvg.toFixed(1) + ' 点，加载 ' + (r.loadMs / 1000).toFixed(1) + ' 秒' + (r.grabMs ? '，取帧 ' + Math.round(r.grabMs) + ' 毫秒' : ''));
   }
   var best = pickBest(results);
   var v = verdictFor(best);
@@ -212,6 +216,16 @@ function withTimeout(p, ms, msg) {
   });
 }
 
+// 空载帧率：不跑识别时画面每秒能刷新几次（看电视本身画 4K 画面的能力）
+async function measureBase(my, ms) {
+  var t0 = now();
+  await sleep(ms);
+  if (my !== gen) return null;
+  var n = 0;
+  for (var i = 0; i < renders.length; i++) if (renders[i] > t0) n++;
+  return n / ((now() - t0) / 1000);
+}
+
 // 预热：至少跑完 3 次识别、并且过了 WARM_MS 才开始计时，最多等 WARM_MAX_MS
 async function warmUp(my) {
   var t0 = now();
@@ -233,6 +247,13 @@ async function runBench() {
   var btn = $('d0-run');
   btn.textContent = '测速中，约 2 分钟';
   btn.disabled = true;
+  // 先测空载帧率，再逐个测引擎；测引擎时每次识别只留 1 帧，测的是引擎本身的速度
+  feed.stop();
+  var b = await measureBase(my, FAST ? 1000 : 3000);
+  if (my !== gen) return;
+  baseFps = b;
+  $('d0-view').textContent = viewText();
+  feed.yieldFrames = 1;
   for (var i = 0; i < ENGINES.length; i++) {
     if (my !== gen) return;
     var e = ENGINES[i];
@@ -277,6 +298,7 @@ async function runBench() {
       renderFps: rCount / ((now() - tStart) / 1000),
       kpAvg: kpSamples.length ? mean(kpSamples) : 0,
       loadMs: loadMs,
+      grabMs: feed.engine && feed.engine.grabMs ? feed.engine.grabMs : null,
       errors: feed.errors
     };
     feed.stop();
@@ -284,6 +306,7 @@ async function runBench() {
     setRow(e.id, fmtRes(r));
   }
   if (my !== gen) return;
+  feed.yieldFrames = 0;
   benching = false;
   btn.disabled = false;
   btn.textContent = '重新测速';
@@ -299,10 +322,11 @@ async function runBench() {
     version: VERSION,
     best: best ? best.id : null,
     route: v.route,
+    baseFps: baseFps,
     camera: camInfo,
     camFps: camFps,
     results: results.map(function (x) {
-      return { id: x.id, fps: x.fps || 0, p50: x.p50 || 0, p95: x.p95 || 0, renderFps: x.renderFps || 0, kpAvg: x.kpAvg || 0, error: x.error || null };
+      return { id: x.id, fps: x.fps || 0, p50: x.p50 || 0, p95: x.p95 || 0, renderFps: x.renderFps || 0, kpAvg: x.kpAvg || 0, grabMs: x.grabMs || null, error: x.error || null };
     })
   });
   // 用最快的引擎继续做全身入镜检查
@@ -330,11 +354,12 @@ function toggleSummary() {
 function restorePrevious() {
   var d0 = store.get().day0;
   if (!d0 || !d0.results) return;
+  if (typeof d0.baseFps === 'number') baseFps = d0.baseFps;
   for (var i = 0; i < d0.results.length; i++) {
     var r = d0.results[i];
     var info = engineInfo(r.id);
     if (!info) continue;
-    var full = { id: r.id, label: info.label, fps: r.fps, p50: r.p50, p95: r.p95, renderFps: r.renderFps, kpAvg: r.kpAvg, loadMs: 0, error: r.error };
+    var full = { id: r.id, label: info.label, fps: r.fps, p50: r.p50, p95: r.p95, renderFps: r.renderFps, kpAvg: r.kpAvg, loadMs: 0, grabMs: r.grabMs || null, error: r.error };
     results.push(full);
     setRow(r.id, fmtRes(full), r.id === d0.best ? 'best' : '');
   }
@@ -348,8 +373,10 @@ export var day0Screen = {
     gen++;
     active = true;
     benching = false;
+    feed.yieldFrames = 0;
     showSummary = false;
     results = [];
+    baseFps = null;
     lastFit = null;
     $('d0-summary').classList.remove('show');
     $('d0-summary-btn').textContent = '结果摘要';
@@ -404,6 +431,7 @@ export var day0Screen = {
     gen++;
     active = false;
     benching = false;
+    feed.yieldFrames = 0;
     feed.stop();
     if (rafId) cancelAnimationFrame(rafId);
     rafId = 0;

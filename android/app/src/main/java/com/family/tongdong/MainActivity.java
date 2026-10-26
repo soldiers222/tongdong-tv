@@ -25,6 +25,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 
 import org.json.JSONObject;
@@ -53,6 +54,7 @@ public class MainActivity extends Activity {
     private static final int REQ_CAMERA = 7;
 
     private WebView web;
+    private FrameLayout root;
     private PermissionRequest pendingRequest;
     private long lastBackAt;
     private boolean stopped;
@@ -91,10 +93,37 @@ public class MainActivity extends Activity {
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
-        setContentView(web);
+        root = new FrameLayout(this);
+        root.setBackgroundColor(Color.rgb(0xB5, 0x44, 0x3A));
+        root.addView(web, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        root.addOnLayoutChangeListener((v, left, top, right, bottom, ol, ot, or, ob) -> {
+            final int w = right - left, h = bottom - top;
+            if (lowRes() && w > 0 && h > 0) root.post(() -> applyLowRes(w, h));
+        });
+        setContentView(root);
         hideSystemUi();
         web.requestFocus();
         web.loadUrl(startUrl());
+    }
+
+    // ---------- 实验：低分辨率渲染 ----------
+    // 网页按屏幕一半的分辨率渲染，再整体放大 2 倍铺满屏幕。4K 电视上显卡要画的像素少四分之三，
+    // 画面和识别可能都更快；代价是字和线条略微发虚。默认关，按菜单键打开。
+
+    private boolean lowRes() {
+        return prefs().getBoolean("lowRes", false);
+    }
+
+    private void applyLowRes(int w, int h) {
+        if (web == null) return;
+        android.view.ViewGroup.LayoutParams lp = web.getLayoutParams();
+        if (lp.width == w / 2 && lp.height == h / 2) return;
+        web.setLayoutParams(new FrameLayout.LayoutParams(w / 2, h / 2));
+        web.setPivotX(0f);
+        web.setPivotY(0f);
+        web.setScaleX(2f);
+        web.setScaleY(2f);
+        web.setLayerType(View.LAYER_TYPE_HARDWARE, null);
     }
 
     // ---------- 生命周期：切到后台就关摄像头 ----------
@@ -213,6 +242,7 @@ public class MainActivity extends Activity {
                 (onCustom ? "" : "✓ ") + "使用内置版本（不用联网，推荐）",
                 (onCustom ? "✓ " : "") + "使用网页版" + (custom.length() > 0 ? "：" + custom : "（先设置地址）"),
                 "设置网页版地址…",
+                "低分辨率渲染（实验）：" + (lowRes() ? "已开，选这里关闭" : "已关，选这里打开"),
                 "退出童动乐园"
         };
         new AlertDialog.Builder(this)
@@ -224,7 +254,10 @@ public class MainActivity extends Activity {
                         if (custom.length() > 0) useCustom(custom);
                         else askUrl();
                     } else if (which == 3) askUrl();
-                    else if (which == 4) finish();
+                    else if (which == 4) {
+                        prefs().edit().putBoolean("lowRes", !lowRes()).apply();
+                        recreate();
+                    } else if (which == 5) finish();
                 })
                 .show();
     }
@@ -398,6 +431,7 @@ public class MainActivity extends Activity {
                 o.put("app", appVersion());
                 o.put("webview", webViewVersion());
                 o.put("cameraPermission", hasCamera());
+                o.put("lowRes", lowRes());
             } catch (Exception ignored) {
                 // 拿不到的字段就空着
             }

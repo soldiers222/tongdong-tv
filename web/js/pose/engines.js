@@ -78,6 +78,8 @@ function MediaPipeEngine(info) {
   this.latest = null;
 }
 
+MediaPipeEngine.prototype.mainThread = true;
+
 MediaPipeEngine.prototype.init = function (onStatus) {
   var self = this;
   var dir = BASE + 'vendor/mediapipe-pose/';
@@ -135,6 +137,8 @@ function MoveNetEngine(info) {
   this.detector = null;
 }
 
+MoveNetEngine.prototype.mainThread = true;
+
 MoveNetEngine.prototype.init = function (onStatus) {
   var self = this;
   var wasm = self.info.backend === 'wasm';
@@ -179,8 +183,11 @@ function MoveNetWorkerEngine(info) {
   this.worker = null;
   this.pending = null;
   this.workerMs = 0;
+  this.grabMs = 0; // 主线程从摄像头取一帧（createImageBitmap）的平均耗时
   this.resizeOk = true;
 }
+
+MoveNetWorkerEngine.prototype.mainThread = false;
 
 MoveNetWorkerEngine.prototype.init = function (onStatus) {
   var self = this;
@@ -230,7 +237,10 @@ MoveNetWorkerEngine.prototype.estimate = function (video, t) {
   var self = this;
   var vw = video.videoWidth, vh = video.videoHeight;
   var tw = Math.min(640, vw), th = Math.round(tw * vh / vw);
+  var g0 = performance.now();
   return self._bitmap(video, tw, th).then(function (bmp) {
+    var g = performance.now() - g0;
+    self.grabMs = self.grabMs ? self.grabMs * 0.8 + g * 0.2 : g;
     return new Promise(function (resolve, reject) {
       self.pending = { resolve: resolve, reject: reject };
       self.worker.postMessage({ type: 'frame', bmp: bmp, w: bmp.width, h: bmp.height, t: t }, [bmp]);
@@ -253,6 +263,8 @@ function MockEngine(name) {
   this.t0 = null;
   this.latency = 35;
 }
+
+MockEngine.prototype.mainThread = false;
 
 MockEngine.prototype.init = function () { return Promise.resolve(); };
 

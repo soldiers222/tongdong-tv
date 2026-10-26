@@ -15,7 +15,10 @@ export var feed = {
   infer: [],
   stamps: [],
   errors: 0,
-  lastError: null
+  lastError: null,
+  // 每次识别完让画面先刷新几帧再识别下一帧。0 = 自动：
+  // 主线程引擎识别时会卡住画面，留 2 帧（识别略慢一点，画面顺很多）；后台线程引擎留 1 帧。
+  yieldFrames: 0
 };
 
 feed.setVideo = function (v) { feed.video = v; };
@@ -135,6 +138,7 @@ async function loop(gen) {
     for (var i = 0; i < feed.listeners.length; i++) {
       try { feed.listeners[i](feed.latest); } catch (e2) { if (window.console) console.error(e2); }
     }
-    await raf();
+    var frames = feed.yieldFrames > 0 ? feed.yieldFrames : (eng.mainThread ? 2 : 1);
+    for (var k = 0; k < frames && feed.running && gen === feed.gen; k++) await raf();
   }
 }
