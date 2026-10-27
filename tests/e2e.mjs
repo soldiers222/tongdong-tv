@@ -114,6 +114,10 @@ function nativeStub() {
       setTimeout(function () { if (window.__tdNativeBench) window.__tdNativeBench(benchResult(c)); }, c.ms || 300);
     },
     cameraSizes: function () { return '[]'; },
+    saveText: function (name, text) {
+      log.saved = { name: name, text: text };
+      return '/sdcard/Android/data/com.family.tongdong/files/' + name;
+    },
     preview: function (json) { log.previews.push(JSON.parse(json)); },
     info: function () {
       var cpus = [];
@@ -303,6 +307,17 @@ try {
     check('结果摘要里有 CPU、调优结果和进程占用', /CPU：4×A73 1\.8GHz \+ 4×A53 1\.4GHz/.test(summary) && /GPU：GPU 不在/.test(summary) && /选用：CPU 2 路×4 线程/.test(summary) && /进程用了 2\.5 核/.test(summary) && /摄像头 25 帧\/秒/.test(summary),
       summary.split('\n').filter((l) => /CPU|调优|选用|进程/.test(l)).join(' / '));
     writeFileSync(join(OUT, 'day0-native-summary.txt'), summary);
+    const saved = await page.evaluate(() => window.__nativeLog.saved);
+    check('测速结束时摘要存到电视上的文件', saved && saved.name === 'day0-summary.txt' && /原生识别调优/.test(saved.text));
+    await page.click('#d0-summary-btn');
+    await sleep(300);
+    const fit = await page.evaluate(() => {
+      const el = document.getElementById('d0-summary');
+      return { sh: el.scrollHeight, ch: el.clientHeight, fs: el.style.fontSize, last: el.textContent.split('\n').slice(-1)[0] };
+    });
+    check('结果摘要一屏放得下，最后一行是文件位置', fit.sh <= fit.ch + 1 && /这份摘要也存在电视上：\/sdcard\//.test(fit.last), JSON.stringify(fit));
+    await shot(page, '12b-native-summary');
+    await page.click('#d0-summary-btn');
     await sleep(600);
     await shot(page, '12-native-day0-done');
     const stops0 = await page.evaluate(() => window.__nativeLog.stops);

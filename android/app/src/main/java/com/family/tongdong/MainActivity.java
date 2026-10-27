@@ -35,8 +35,11 @@ import android.widget.Toast;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -567,6 +570,27 @@ public class MainActivity extends Activity {
         public String poseConfig(String json) {
             String err = pose().configure(json);
             return result(err == null, err);
+        }
+
+        /**
+         * 把文字存到应用自己的外部目录（不用存储权限），电脑上用 adb pull 取：
+         * /sdcard/Android/data/com.family.tongdong/files/文件名。返回完整路径，失败返回空字符串。
+         */
+        @JavascriptInterface
+        public String saveText(String name, String text) {
+            try {
+                String safe = name == null ? "" : name.replaceAll("[^A-Za-z0-9._-]", "");
+                if (safe.length() == 0) return "";
+                File dir = getExternalFilesDir(null);
+                if (dir == null) return "";
+                File f = new File(dir, safe);
+                try (FileOutputStream out = new FileOutputStream(f)) {
+                    out.write((text == null ? "" : text).getBytes(StandardCharsets.UTF_8));
+                }
+                return f.getAbsolutePath();
+            } catch (Exception e) {
+                return "";
+            }
         }
 
         /** 测某种识别方式最快能算多快；结果异步回到 window.__tdNativeBench */

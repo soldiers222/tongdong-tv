@@ -293,14 +293,14 @@ button {
   position: absolute;
   left: 96px;
   right: 96px;
-  top: 216px;
-  bottom: 168px;
+  top: 196px;
+  bottom: 160px;
   margin: 0;
   background: var(--night-2);
   border-radius: 20px;
-  padding: 36px 48px;
+  padding: 28px 44px;
   font-size: 26px;
-  line-height: 1.5;
+  line-height: 1.42;
   white-space: pre-wrap;
   overflow: hidden;
   display: none;

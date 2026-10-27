@@ -189,7 +189,6 @@ function summaryText() {
   var v = verdictFor(best);
   lines.push('结论：' + v.title);
   lines.push('全身入镜：' + (lastFit ? (lastFit.ok ? '合格，身体约占画面 ' + Math.round((lastFit.frac || 0) * 100) + '%' : lastFit.msg) : '未检测'));
-  lines.push('第 6、7 项（后台取帧、手机路线延迟）本版不测。');
   return lines.join('\n');
 }
 
@@ -494,6 +493,7 @@ async function runBench() {
       return { id: x.id, fps: x.fps || 0, p50: x.p50 || 0, p95: x.p95 || 0, renderFps: x.renderFps || 0, kpAvg: x.kpAvg || 0, grabMs: x.grabMs || null, threads: x.threads || null, cpu: x.cpu || null, camFps: x.camFps || null, sampleMs: x.sampleMs || null, config: x.config || null, error: x.error || null };
     })
   });
+  saveSummary(summaryText());
   // 用最快的引擎继续做全身入镜检查
   if (best) {
     try {
@@ -507,12 +507,32 @@ async function runBench() {
   }
 }
 
+// 摘要存到电视上的文件（电视版 APK），电脑上用 adb pull 取，比拍照准
+function saveSummary(text) {
+  var n = native.bridge();
+  if (!n || typeof n.saveText !== 'function') return '';
+  try { return n.saveText('day0-summary.txt', text) || ''; } catch (e) { return ''; }
+}
+
+// 摘要行数多时缩小字号，保证一屏放得下（截屏能看全）
+function fitSummary(el) {
+  var size = 26;
+  el.style.fontSize = size + 'px';
+  while (size > 13 && el.scrollHeight > el.clientHeight + 1) {
+    size -= 1;
+    el.style.fontSize = size + 'px';
+  }
+}
+
 function toggleSummary() {
   showSummary = !showSummary;
   var el = $('d0-summary');
   if (showSummary) {
-    el.textContent = summaryText();
+    var text = summaryText();
+    var path = saveSummary(text);
+    el.textContent = text + (path ? '\n这份摘要也存在电视上：' + path : '');
     el.classList.add('show');
+    fitSummary(el);
     $('d0-summary-btn').textContent = '关闭摘要';
   } else {
     el.classList.remove('show');
