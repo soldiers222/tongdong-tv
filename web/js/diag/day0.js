@@ -322,21 +322,22 @@ function tuneLines(t) {
 async function ensureWebCamera(my) {
   if (feed.engine && feed.engine.native) feed.release();
   nativeView(false);
-  if (cameraOpen()) return true;
   // 原生识别刚放开摄像头时，网页可能要等一下才打得开
-  for (var i = 0; i < 3; i++) {
+  for (var i = 0; i < 3 && !cameraOpen(); i++) {
     try {
       var info = await openCamera($('cam'));
       if (my !== gen) return false;
       camInfo = info;
       stage.setVideoSize(info.width, info.height);
-      return true;
     } catch (e) {
       if (my !== gen) return false;
       await sleep(800);
     }
   }
-  return false;
+  if (!cameraOpen()) return false;
+  // 顺便量一下网页摄像头的实际帧率，和原生摄像头对比（光线暗时摄像头会自己降帧率）
+  if (!camFps) camFps = await measureCamFps($('cam'), FAST ? 500 : 1500);
+  return my === gen;
 }
 
 // 空载帧率：不跑识别时画面每秒能刷新几次（看电视本身画 4K 画面的能力）
@@ -366,6 +367,7 @@ async function runBench() {
   benching = true;
   results = [];
   nativeTune = null;
+  camFps = null;
   buildTable();
   showVerdict(null);
   var btn = $('d0-run');
