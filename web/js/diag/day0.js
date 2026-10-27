@@ -18,6 +18,7 @@ var FAST = qs('bench') === 'fast'; // 自动化测试用：缩短测速时间
 var WARM_MS = FAST ? 800 : 2500;
 var WARM_MAX_MS = FAST ? 60000 : 25000; // 预热最多等这么久（第一次识别可能要编译显卡程序）
 var MEASURE_MS = FAST ? 3000 : 10000;
+var TUNE_MS = FAST ? 400 : 2500; // 原生识别调优：每种方式纯计算测多久
 // ?engines=native,mn-wasm：只测这几个引擎（调试用）
 var ONLY = qs('engines') ? qs('engines').split(',') : null;
 function benchEngines() {
@@ -34,6 +35,7 @@ var kpSamples = [];
 var camInfo = null;   // 网页摄像头
 var camFps = null;
 var nativeCam = null; // 原生摄像头（电视版 APK）
+var nativeTune = null; // 原生识别调优结果 { list, best, applied, camFps }
 var device = null;
 var results = [];
 var lastFit = null;
@@ -165,17 +167,23 @@ function summaryText() {
   lines.push('童动乐园 设备测试结果（' + VERSION + '，' + stamp() + '）');
   lines.push('运行环境：' + (d.shell ? 'APK 外壳' + (d.native && d.native.app ? ' ' + d.native.app : '') : '浏览器') + (d.webview ? '，WebView ' + d.webview : (d.chrome ? '，Chrome ' + d.chrome : '')) + '，多线程' + (window.crossOriginIsolated ? '可用' : '不可用'));
   lines.push('设备：' + (d.model || '未知型号') + (d.native && d.native.harmony ? '，HarmonyOS ' + d.native.harmony : '') + (d.android ? '，Android ' + d.android : '') + '，' + (d.cores || '?') + ' 核' + (d.mem ? '，内存约 ' + d.mem + ' GB' : '') + '，图形 ' + d.gl);
+  var ct = d.native ? native.cpuText(d.native.cpus) : '';
+  if (ct) lines.push('CPU：' + ct);
   if (nativeCam) {
     var nf = native.info() || {};
-    lines.push('原生摄像头：' + nativeCam.label + '，识别 ' + nativeCam.width + '×' + nativeCam.height + (nativeCam.preview ? '，预览 ' + nativeCam.preview : '') + (nf.fpsRange ? '，帧率范围 ' + nf.fpsRange : '') + (nf.error ? '，上次出错：' + nf.error : ''));
+    lines.push('原生摄像头：' + nativeCam.label + '，识别 ' + nativeCam.width + '×' + nativeCam.height + (nativeCam.preview ? '，预览 ' + nativeCam.preview : '') + (nf.fpsRange ? '，帧率范围 ' + nf.fpsRange : '') + (nf.camFps ? '，实际 ' + Math.round(nf.camFps) + ' 帧/秒' : '') + (nf.bad && nf.bad.length ? '，崩溃过不再用：' + nf.bad.join('、') : '') + (nf.error ? '，上次出错：' + nf.error : ''));
   }
   lines.push((nativeCam ? '网页摄像头：' : '摄像头：') + (camInfo ? camInfo.label + '，' + camInfo.width + '×' + camInfo.height + (camFps ? '，实测 ' + camFps.toFixed(0) + ' 帧/秒' : '') : '未打开'));
   lines.push('画面：' + viewText());
+  var tl = tuneLines(nativeTune);
+  for (var ti = 0; ti < tl.length; ti++) lines.push(tl[ti]);
   lines.push('识别测速（识别帧率 / 单帧耗时中位数 / 95 分位 / 画面帧率 / 平均关键点）：');
   for (var i = 0; i < results.length; i++) {
     var r = results[i];
     if (r.error) lines.push('  ' + r.label + '：' + r.error);
-    else lines.push('  ' + r.label + '：' + r.fps.toFixed(1) + ' 帧/秒，' + Math.round(r.p50) + ' / ' + Math.round(r.p95) + ' 毫秒，画面 ' + Math.round(r.renderFps) + ' 帧/秒，' + r.kpAvg.toFixed(1) + ' 点，加载 ' + (r.loadMs / 1000).toFixed(1) + ' 秒' + (r.grabMs ? '，取帧 ' + Math.round(r.grabMs) + ' 毫秒' : '') + (r.threads > 1 ? '，' + r.threads + ' 线程' : ''));
+    else lines.push('  ' + r.label + '：' + r.fps.toFixed(1) + ' 帧/秒，' + Math.round(r.p50) + ' / ' + Math.round(r.p95) + ' 毫秒，画面 ' + Math.round(r.renderFps) + ' 帧/秒，' + r.kpAvg.toFixed(1) + ' 点，加载 ' + (r.loadMs / 1000).toFixed(1) + ' 秒' + (r.grabMs ? '，取帧 ' + Math.round(r.grabMs) + ' 毫秒' : '')
+      + (r.config ? '，' + r.config : (r.threads > 1 ? '，' + r.threads + ' 线程' : ''))
+      + (r.cpu ? '，进程用了 ' + r.cpu.toFixed(1) + ' 核' : '') + (r.camFps ? '，摄像头 ' + Math.round(r.camFps) + ' 帧/秒' : '') + (r.sampleMs ? '，取样 ' + r.sampleMs.toFixed(1) + ' 毫秒' : ''));
   }
   var best = pickBest(results);
   var v = verdictFor(best);
@@ -262,6 +270,55 @@ async function startNative(my, onStatus) {
   nativeView(true);
 }
 
+// 原生识别调优：在这台电视上把各种识别方式（CPU 线程数 × 并行路数、GPU、NNAPI）逐个纯计算测一遍，
+// 选画面不卡、跟得上摄像头、延迟最低的，换上并存起来（游戏开始时用）
+async function tuneNative(my, rowId) {
+  // 核数以安卓报的为准（网页里的 hardwareConcurrency 有的会打折扣）
+  var cpus = device && device.native && device.native.cpus;
+  var cores = (cpus && cpus.length) || (device && device.cores) || navigator.hardwareConcurrency || 4;
+  var list = native.variants(cores);
+  if (FAST) list = list.filter(function (v) { return (v.accel === 'cpu' && v.threads === 4) || v.accel === 'gpu'; });
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    if (my !== gen) return null;
+    var v = list[i];
+    setRow(rowId, ['调优 ' + (i + 1) + '/' + list.length, native.configLabel(v), '—'], 'running');
+    var rStart = renders.length ? renders[renders.length - 1] : now();
+    var t0 = now();
+    var r = await native.bench(v, TUNE_MS);
+    var el = (now() - t0) / 1000;
+    var rc = 0;
+    for (var k = 0; k < renders.length; k++) if (renders[k] > rStart) rc++;
+    r.renderFps = el > 0 ? rc / el : 0;
+    r.cfg = v;
+    r.label = native.configLabel(v);
+    out.push(r);
+  }
+  if (my !== gen) return null;
+  var camFpsNow = (native.info() || {}).camFps || 0;
+  var best = native.pickConfig(out, baseFps, camFpsNow);
+  var applied = null;
+  if (best) {
+    setRow(rowId, ['换成 ' + best.label, '—', '—'], 'running');
+    var res = native.configure(best.cfg);
+    if (res && res.ok) applied = best.cfg;
+  }
+  return { list: out, best: best ? best.cfg : null, applied: applied, camFps: camFpsNow };
+}
+
+function tuneLines(t) {
+  var lines = [];
+  if (!t || !t.list) return lines;
+  lines.push('原生识别调优（纯计算：每秒次数 / 单次耗时中位数 / 进程用了几个核 / 画面帧率）：');
+  for (var i = 0; i < t.list.length; i++) {
+    var r = t.list[i];
+    if (!r.ok) lines.push('  ' + r.label + '：' + (r.error || '失败'));
+    else lines.push('  ' + r.label + '：' + r.fps.toFixed(1) + ' 次/秒，' + Math.round(r.p50) + ' 毫秒，' + (r.cpu || 0).toFixed(1) + ' 核，画面 ' + Math.round(r.renderFps || 0) + (r.model && r.model.indexOf('f16') >= 0 ? '，半精度模型' : ''));
+  }
+  lines.push('  选用：' + (t.applied ? native.configLabel(t.applied) : (t.best ? native.configLabel(t.best) + '（没换成功）' : '都不行，用默认方式')) + (t.camFps ? '（摄像头 ' + Math.round(t.camFps) + ' 帧/秒）' : ''));
+  return lines;
+}
+
 async function ensureWebCamera(my) {
   if (feed.engine && feed.engine.native) feed.release();
   nativeView(false);
@@ -308,10 +365,11 @@ async function runBench() {
   var my = gen;
   benching = true;
   results = [];
+  nativeTune = null;
   buildTable();
   showVerdict(null);
   var btn = $('d0-run');
-  btn.textContent = '测速中，约 2 分钟';
+  btn.textContent = native.available() ? '测速中，约 3 分钟' : '测速中，约 2 分钟';
   btn.disabled = true;
   // 先测空载帧率，再逐个测引擎；测引擎时每次识别只留 1 帧，测的是引擎本身的速度
   feed.stop();
@@ -348,6 +406,7 @@ async function runBench() {
         stage.setVideoSize(feed.engine.frameW, feed.engine.frameH);
         noteNativeCam();
         nativeView(true);
+        nativeTune = await tuneNative(my, e.id);
       }
     } catch (err) {
       if (my !== gen) return;
@@ -366,9 +425,11 @@ async function runBench() {
     kpSamples = [];
     var tStart = now();
     var rStart = renders.length ? renders[renders.length - 1] : tStart;
+    var ni0 = isNative ? native.info() : null;
     setRow(e.id, ['测量中', '—', '—'], 'running');
     await sleep(MEASURE_MS);
     if (my !== gen) return;
+    var ni1 = isNative ? native.info() : null;
     var st = feed.stats(MEASURE_MS); // 原生识别的单帧耗时是安卓里实测的（见 feed.js）
     var rCount = 0;
     for (var k = 0; k < renders.length; k++) if (renders[k] > rStart) rCount++;
@@ -385,6 +446,13 @@ async function runBench() {
       threads: feed.engine && feed.engine.threads ? feed.engine.threads : null,
       errors: feed.errors
     };
+    if (ni0 && ni1) {
+      var wall = (ni1.wallMs || 0) - (ni0.wallMs || 0);
+      r.cpu = wall > 0 ? ((ni1.cpuMs || 0) - (ni0.cpuMs || 0)) / wall : null;
+      r.camFps = ni1.camFps || null;
+      r.sampleMs = ni1.sampleMs || null;
+      r.config = ni1.config ? native.configLabel(ni1.config) : null;
+    }
     feed.stop();
     if (isNative) {
       feed.release();
@@ -413,8 +481,15 @@ async function runBench() {
     baseFps: baseFps,
     camera: camInfo,
     camFps: camFps,
+    nativeConfig: nativeTune && nativeTune.applied ? nativeTune.applied : (store.get().day0 && store.get().day0.nativeConfig) || null,
+    nativeTune: nativeTune ? {
+      best: nativeTune.best,
+      applied: nativeTune.applied,
+      camFps: nativeTune.camFps,
+      list: nativeTune.list.map(function (x) { return { label: x.label, ok: !!x.ok, fps: x.fps || 0, p50: x.p50 || 0, cpu: x.cpu || 0, renderFps: x.renderFps || 0, model: x.model || '', error: x.error || null }; })
+    } : null,
     results: results.map(function (x) {
-      return { id: x.id, fps: x.fps || 0, p50: x.p50 || 0, p95: x.p95 || 0, renderFps: x.renderFps || 0, kpAvg: x.kpAvg || 0, grabMs: x.grabMs || null, threads: x.threads || null, error: x.error || null };
+      return { id: x.id, fps: x.fps || 0, p50: x.p50 || 0, p95: x.p95 || 0, renderFps: x.renderFps || 0, kpAvg: x.kpAvg || 0, grabMs: x.grabMs || null, threads: x.threads || null, cpu: x.cpu || null, camFps: x.camFps || null, sampleMs: x.sampleMs || null, config: x.config || null, error: x.error || null };
     })
   });
   // 用最快的引擎继续做全身入镜检查
@@ -447,11 +522,12 @@ function restorePrevious() {
   var d0 = store.get().day0;
   if (!d0 || !d0.results) return;
   if (typeof d0.baseFps === 'number') baseFps = d0.baseFps;
+  if (d0.nativeTune && d0.nativeTune.list) nativeTune = d0.nativeTune;
   for (var i = 0; i < d0.results.length; i++) {
     var r = d0.results[i];
     var info = engineInfo(r.id);
     if (!info) continue;
-    var full = { id: r.id, label: info.label, fps: r.fps, p50: r.p50, p95: r.p95, renderFps: r.renderFps, kpAvg: r.kpAvg, loadMs: 0, grabMs: r.grabMs || null, threads: r.threads || null, error: r.error };
+    var full = { id: r.id, label: info.label, fps: r.fps, p50: r.p50, p95: r.p95, renderFps: r.renderFps, kpAvg: r.kpAvg, loadMs: 0, grabMs: r.grabMs || null, threads: r.threads || null, cpu: r.cpu || null, camFps: r.camFps || null, sampleMs: r.sampleMs || null, config: r.config || null, error: r.error };
     results.push(full);
     setRow(r.id, fmtRes(full), r.id === d0.best ? 'best' : '');
   }
@@ -470,6 +546,7 @@ export var day0Screen = {
     results = [];
     baseFps = null;
     lastFit = null;
+    nativeTune = null;
     $('d0-summary').classList.remove('show');
     $('d0-summary-btn').textContent = '结果摘要';
     $('d0-run').textContent = '开始测速';

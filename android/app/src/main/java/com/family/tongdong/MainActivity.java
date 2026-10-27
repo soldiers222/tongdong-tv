@@ -154,12 +154,19 @@ public class MainActivity extends Activity {
                         if (web != null) web.evaluateJavascript("window.__tdNativeError&&window.__tdNativeError(" + JSONObject.quote(message) + ")", null);
                     });
                 }
+
+                @Override
+                public void onBench(String json) {
+                    runOnUiThread(() -> {
+                        if (web != null) web.evaluateJavascript("window.__tdNativeBench&&window.__tdNativeBench(" + json + ")", null);
+                    });
+                }
             });
         }
         return pose;
     }
 
-    private String poseStart() {
+    private String poseStart(String options) {
         try {
             if (!PoseEngine.available(this)) return result(false, "这个安装包里没有原生识别模型");
             if (!hasCamera()) {
@@ -172,7 +179,7 @@ public class MainActivity extends Activity {
             SurfaceTexture st = previewTexture;
             if (st == null) return result(false, "preview");
             PoseEngine p = pose();
-            String why = p.start(st);
+            String why = p.start(st, options);
             if (why != null) return result(false, why);
             JSONObject o = new JSONObject();
             o.put("ok", true);
@@ -552,7 +559,20 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String poseStart(String options) {
-            return MainActivity.this.poseStart();
+            return MainActivity.this.poseStart(options);
+        }
+
+        /** 换识别方式（{accel, threads, workers}），返回 {ok, error} */
+        @JavascriptInterface
+        public String poseConfig(String json) {
+            String err = pose().configure(json);
+            return result(err == null, err);
+        }
+
+        /** 测某种识别方式最快能算多快；结果异步回到 window.__tdNativeBench */
+        @JavascriptInterface
+        public void poseBench(String json) {
+            pose().bench(json);
         }
 
         @JavascriptInterface
@@ -593,6 +613,7 @@ public class MainActivity extends Activity {
                 o.put("webview", webViewVersion());
                 o.put("cameraPermission", hasCamera());
                 o.put("nativePose", PoseEngine.available(MainActivity.this));
+                o.put("cpus", PoseEngine.cpuJson());
             } catch (Exception ignored) {
                 // 拿不到的字段就空着
             }

@@ -40,7 +40,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: android/app/src/main/assets/models
-          key: movenet-singlepose-lightning-tflite-int8-v4
+          key: movenet-singlepose-lightning-tflite-int8-v4-float16-v4
 
       - name: 下载识别模型（MoveNet Lightning，TensorFlow Lite）
         run: |
@@ -64,8 +64,26 @@ jobs:
             echo "::error title=模型下载失败::没拿到有效的 MoveNet TFLite 文件，原生识别不可用"
             exit 1
           fi
-          ls -la "$f"
-          sha256sum "$f"
+          # GPU 用的半精度模型（可选：下载不到时 GPU 改用 int8 模型）
+          h=android/app/src/main/assets/models/movenet_lightning_f16.tflite
+          if [ ! -s "$h" ] || [ "$(magic "$h")" != "TFL3" ]; then
+            rm -f "$h"
+            curl -fL --retry 3 -o "$h" "https://tfhub.dev/google/lite-model/movenet/singlepose/lightning/tflite/float16/4?lite-format=tflite" || true
+          fi
+          if [ ! -s "$h" ] || [ "$(magic "$h")" != "TFL3" ]; then
+            rm -f "$h"
+            mkdir -p /tmp/movenet16
+            curl -fL --retry 3 -o /tmp/movenet16/m.tar.gz "https://www.kaggle.com/api/v1/models/google/movenet/tfLite/singlepose-lightning-tflite-float16/1/download" || true
+            tar -xzf /tmp/movenet16/m.tar.gz -C /tmp/movenet16 2>/dev/null || true
+            m=$(find /tmp/movenet16 -name '*.tflite' | head -1)
+            [ -n "$m" ] && cp "$m" "$h"
+          fi
+          if [ ! -s "$h" ] || [ "$(magic "$h")" != "TFL3" ]; then
+            rm -f "$h"
+            echo "::warning title=半精度模型没下载到::GPU 识别会改用 int8 模型"
+          fi
+          ls -la android/app/src/main/assets/models
+          sha256sum android/app/src/main/assets/models/*
 
       - name: 构建
         working-directory: android

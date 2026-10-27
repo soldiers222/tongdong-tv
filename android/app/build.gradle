@@ -70,6 +70,9 @@ android {
 dependencies {
     // 原生姿态识别（MoveNet）。模型文件由 CI 下载到 src/main/assets/models/，不进仓库
     implementation 'org.tensorflow:tensorflow-lite:2.16.1'
+    // GPU 加速（设备测试里实测，比 CPU 快才用）
+    implementation 'org.tensorflow:tensorflow-lite-gpu:2.16.1'
+    implementation 'org.tensorflow:tensorflow-lite-gpu-api:2.16.1'
 }
 
 tasks.named('preBuild') { dependsOn syncWebAssets }

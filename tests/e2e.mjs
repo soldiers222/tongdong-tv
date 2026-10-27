@@ -58,8 +58,15 @@ const browser = await puppeteer.launch({ executablePath: CHROME, headless: true,
 function nativeStub() {
   var timer = null;
   var t0 = 0;
-  var log = { starts: 0, stops: 0, previews: [] };
+  var log = { starts: 0, stops: 0, previews: [], startOpts: [], configs: [], benches: [] };
+  var config = { accel: 'cpu', threads: 3, workers: 2 };
   window.__nativeLog = log;
+  // 模拟算力：单次耗时 = 40 + 30/线程数 毫秒，几路并行就快几倍；GPU 不在兼容列表；NNAPI 每秒 15 次
+  function benchResult(c) {
+    if (c.accel === 'gpu') return { ok: false, accel: 'gpu', error: 'GPU 不在 TensorFlow Lite 的兼容列表里' };
+    var ms = c.accel === 'nnapi' ? 66 : 40 + 30 / c.threads;
+    return { ok: true, accel: c.accel, threads: c.threads, workers: c.workers, fps: c.workers * 1000 / ms, p50: ms, p95: ms * 1.2, cpu: c.threads * c.workers * 0.9, model: 'movenet_lightning_int8.tflite' };
+  }
   function pose(t) {
     var p = [
       [0.50, 0.20], [0.49, 0.19], [0.51, 0.19], [0.48, 0.20], [0.52, 0.20],
@@ -77,8 +84,11 @@ function nativeStub() {
   window.TongdongNative = {
     poseAvailable: function () { return true; },
     hasCameraPermission: function () { return true; },
-    poseStart: function () {
+    poseStart: function (opts) {
       log.starts++;
+      var o = JSON.parse(opts || '{}');
+      log.startOpts.push(o);
+      if (o.accel) config = { accel: o.accel, threads: o.threads, workers: o.workers };
       if (!timer) {
         t0 = performance.now();
         timer = setInterval(function () {
@@ -88,10 +98,28 @@ function nativeStub() {
       return JSON.stringify({ ok: true, w: 640, h: 480 });
     },
     poseStop: function () { log.stops++; clearInterval(timer); timer = null; },
-    poseInfo: function () { return JSON.stringify({ camera: '0', facing: 'back', w: 640, h: 480, pw: 1440, ph: 1080, rotation: 0, threads: 4, input: 'UINT8', running: !!timer, p50: 18.5, p95: 22, fps: 25, error: '' }); },
+    poseInfo: function () {
+      var t = performance.now();
+      return JSON.stringify({ camera: '0', facing: 'back', level: 'EXTERNAL', w: 640, h: 480, pw: 1440, ph: 1080, rotation: 0, threads: config.threads * config.workers, config: config, input: 'UINT8', running: !!timer, p50: 18.5, p95: 22, fps: 25, camFps: 25, sampleMs: 0.6, cpuMs: Math.round(t * 2.5), wallMs: Math.round(t), bad: [], error: '' });
+    },
+    poseConfig: function (json) {
+      var c = JSON.parse(json);
+      log.configs.push(c);
+      config = { accel: c.accel, threads: c.threads, workers: c.workers };
+      return JSON.stringify({ ok: true });
+    },
+    poseBench: function (json) {
+      var c = JSON.parse(json);
+      log.benches.push(c);
+      setTimeout(function () { if (window.__tdNativeBench) window.__tdNativeBench(benchResult(c)); }, c.ms || 300);
+    },
     cameraSizes: function () { return '[]'; },
     preview: function (json) { log.previews.push(JSON.parse(json)); },
-    info: function () { return JSON.stringify({ manufacturer: 'HUAWEI', model: 'FREU-560B', android: '12', sdk: 31, harmony: '4.3.0', app: 'stub', webview: 'stub', cameraPermission: true, nativePose: true }); }
+    info: function () {
+      var cpus = [];
+      for (var i = 0; i < 8; i++) cpus.push({ i: i, mhz: i < 4 ? 1800 : 1400, part: i < 4 ? 'A73' : 'A53' });
+      return JSON.stringify({ manufacturer: 'HUAWEI', model: 'FREU-560B', android: '12', sdk: 31, harmony: '4.3.0', app: 'stub', webview: 'stub', cameraPermission: true, nativePose: true, cpus: cpus });
+    }
   };
 }
 
@@ -261,14 +289,19 @@ try {
     const dbg = await page.evaluate(() => window.TD.day0.debug());
     const nat = dbg.results.find((x) => x.id === 'native');
     const wasm = dbg.results.find((x) => x.id === 'mn-wasm');
+    const tune = await page.evaluate(() => ({ benches: window.__nativeLog.benches, configs: window.__nativeLog.configs, saved: window.TD.store.get().day0.nativeConfig }));
+    check('原生识别：调优试了 CPU 和 GPU', tune.benches.length === 3 && tune.benches.some((b) => b.accel === 'gpu'), JSON.stringify(tune.benches));
+    check('原生识别：选了跟得上摄像头、延迟最低的方式并换上', tune.saved && tune.saved.accel === 'cpu' && tune.saved.threads === 4 && tune.saved.workers === 2 && tune.configs.length === 1, JSON.stringify(tune.saved));
     check('原生识别：测速完成，速度接近每秒 25 次', ok && nat && !nat.error && nat.fps > 18 && nat.fps < 30, nat ? (nat.error || nat.fps.toFixed(1) + ' 帧/秒，画面 ' + Math.round(nat.renderFps) + ' 帧/秒') : '无结果');
     check('原生识别：单帧耗时用安卓里实测的', nat && nat.p50 > 18 && nat.p50 < 19, nat ? String(nat.p50) : '');
     check('原生识别：关键点数量', nat && nat.kpAvg >= 15, nat ? nat.kpAvg.toFixed(1) : '');
     check('原生识别让出摄像头后，网页摄像头能打开', wasm && !wasm.error, wasm ? (wasm.error || wasm.fps.toFixed(1) + ' 帧/秒') : '无结果');
     check('测速后接着用最快的原生识别', await waitFor(page, () => window.TD.feed.engineId === 'native' && document.body.classList.contains('native-cam'), 8000));
     const summary = await page.evaluate(() => window.TD.day0.debug().summary);
-    check('结果摘要里有原生识别和两路摄像头', /原生识别（多核 CPU）：\d/.test(summary) && /原生摄像头：Camera2 #0 后置，识别 640×480，预览 1440×1080/.test(summary) && /网页摄像头：/.test(summary),
+    check('结果摘要里有原生识别和两路摄像头', /原生识别（多核 CPU）：\d/.test(summary) && /原生摄像头：Camera2 #0 后置 EXTERNAL，识别 640×480，预览 1440×1080/.test(summary) && /网页摄像头：/.test(summary),
       summary.split('\n').filter((l) => /原生|摄像头/.test(l)).join(' / '));
+    check('结果摘要里有 CPU、调优结果和进程占用', /CPU：4×A73 1\.8GHz \+ 4×A53 1\.4GHz/.test(summary) && /GPU：GPU 不在/.test(summary) && /选用：CPU 2 路×4 线程/.test(summary) && /进程用了 2\.5 核/.test(summary) && /摄像头 25 帧\/秒/.test(summary),
+      summary.split('\n').filter((l) => /CPU|调优|选用|进程/.test(l)).join(' / '));
     writeFileSync(join(OUT, 'day0-native-summary.txt'), summary);
     await sleep(600);
     await shot(page, '12-native-day0-done');
@@ -286,6 +319,8 @@ try {
   {
     const page = await open('/?screen=fruit&dur=10', { nativeStub: true });
     check('原生识别：切水果用原生识别', await waitFor(page, () => window.TD.feed.engineId === 'native' && window.TD.play.debug().running, 10000), await page.evaluate(() => window.TD.feed.engineId));
+    const opts = await page.evaluate(() => window.__nativeLog.startOpts.slice(-1)[0]);
+    check('原生识别：游戏用设备测试选好的方式', opts && opts.accel === 'cpu' && opts.threads === 4 && opts.workers === 2, JSON.stringify(opts));
     const lay = await page.evaluate(() => ({ p: window.__nativeLog.previews.filter((x) => x.show).pop(), cls: document.body.classList.contains('native-cam') }));
     check('原生识别：运动页透明，预览层铺满全屏', lay.cls && lay.p && lay.p.fit === 'cover' && Math.abs(lay.p.w - 1920) < 2 && Math.abs(lay.p.h - 1080) < 2, JSON.stringify(lay.p));
     await sleep(5000);

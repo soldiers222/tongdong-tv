@@ -105,11 +105,14 @@ NativeEngine.prototype.init = function (onStatus) {
   var t0 = now();
   function tryStart() {
     var r;
-    try { r = JSON.parse(n.poseStart('{}')); } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
+    // 用设备测试选好的识别方式（没测过就用安卓里的默认方式）
+    var opts = native.savedConfig() || {};
+    try { r = JSON.parse(n.poseStart(JSON.stringify(opts))); } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
     if (r.ok) {
       if (r.w && r.h) { self.frameW = r.w; self.frameH = r.h; }
       var ni = native.info();
       if (ni && ni.threads) self.threads = ni.threads;
+      if (ni && ni.config) self.configLabel = native.configLabel(ni.config);
       return Promise.resolve();
     }
     // 摄像头权限弹窗、预览层还没准备好：等一会儿再试
