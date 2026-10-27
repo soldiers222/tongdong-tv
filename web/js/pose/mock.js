@@ -87,5 +87,42 @@ export var MOCK_SCRIPTS = {
   },
   handsup: function () {
     return skeleton({ handsUp: true });
+  },
+
+  // 双人（返回 [画面左半边的人, 右半边的人]，摄像头原始画面坐标）
+  still2: function (t) {
+    return [
+      skeleton({ cx: 0.27, height: 0.72, sway: 0.003 * Math.sin(t / 700) }),
+      skeleton({ cx: 0.73, height: 0.7, sway: 0.003 * Math.sin(t / 650) })
+    ];
+  },
+  fruit2: function (t) {
+    function half(cx, tt) {
+      var sw = sweep(tt);
+      return skeleton({
+        cx: cx,
+        height: 0.72,
+        rightHand: { x: cx + (sw.x - 0.5) * 0.42, y: sw.y },
+        leftHand: { x: cx + 0.09 * Math.sin(tt / 520), y: 0.3 + 0.08 * Math.cos(tt / 610) }
+      });
+    }
+    return [half(0.27, t), half(0.73, t + 500)];
+  },
+  // 左半边的人同单人脚本；右半边的人第一轮早 1 秒落脚、第二轮多站 1 秒
+  balance2: function (t) {
+    var s = t / 1000;
+    var sway = 0.005 * Math.sin(t / 320);
+    function one(cx, up1, down1, up2, down2) {
+      var o = { cx: cx, height: 0.74, sway: sway };
+      if (s >= 23) return skeleton({ cx: cx, height: 0.74, handsUp: true });
+      if (s >= up1 && s < down1) o.liftRight = 1;
+      else if (s >= up2 && s < down2) o.liftLeft = 1;
+      else o.sway = sway * 0.5;
+      return skeleton(o);
+    }
+    return [one(0.27, 3, 9, 14, 20), one(0.73, 3, 8, 14, 21)];
+  },
+  handsup2: function () {
+    return [skeleton({ cx: 0.27, height: 0.72, handsUp: true }), skeleton({ cx: 0.73, height: 0.72 })];
   }
 };

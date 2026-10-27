@@ -137,8 +137,11 @@ async function loop(gen) {
     keepLast(feed.infer, 400);
     feed.stamps.push(t1);
     keepLast(feed.stamps, 400);
+    // 双人时引擎返回 [左半边的人, 右半边的人]（摄像头画面的左右）
+    var kps = Array.isArray(kp) ? kp : null;
     feed.latest = {
-      kp: kp,
+      kp: kps ? null : kp,
+      kps: kps,
       t: nat && eng.captureTime != null ? eng.captureTime : t0, // 画面拍下的时间，用来做延迟补偿
       t1: t1,
       w: nat ? eng.frameW : (mock ? 1280 : v.videoWidth),

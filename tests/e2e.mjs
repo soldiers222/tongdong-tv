@@ -60,6 +60,7 @@ function nativeStub() {
   var t0 = 0;
   var log = { starts: 0, stops: 0, previews: [], startOpts: [], configs: [], benches: [] };
   var config = { accel: 'cpu', threads: 3, workers: 2 };
+  var players = 1;
   window.__nativeLog = log;
   // 模拟算力：单次耗时 = 40 + 30/线程数 毫秒，几路并行就快几倍；GPU 不在兼容列表；NNAPI 每秒 15 次
   function benchResult(c) {
@@ -81,6 +82,12 @@ function nativeStub() {
     for (var i = 0; i < 17; i++) k.push(p[i][0], p[i][1], 0.8);
     return k;
   }
+  // 双人：把一个人放到画面左半边或右半边（横向缩到 0.8 倍，肩宽还在合格范围里）
+  function half(k, slot) {
+    var out = k.slice();
+    for (var i = 0; i < 17; i++) out[i * 3] = (slot ? 0.75 : 0.25) + (k[i * 3] - 0.5) * 0.8;
+    return out;
+  }
   window.TongdongNative = {
     poseAvailable: function () { return true; },
     hasCameraPermission: function () { return true; },
@@ -89,10 +96,14 @@ function nativeStub() {
       var o = JSON.parse(opts || '{}');
       log.startOpts.push(o);
       if (o.accel) config = { accel: o.accel, threads: o.threads, workers: o.workers };
+      if (o.players) players = o.players;
       if (!timer) {
         t0 = performance.now();
         timer = setInterval(function () {
-          if (window.__tdNativePose) window.__tdNativePose({ k: pose(performance.now() - t0), w: 640, h: 480, age: 30, ms: 18.5 });
+          if (!window.__tdNativePose) return;
+          var t = performance.now() - t0;
+          if (players === 2) window.__tdNativePose({ k: half(pose(t), 0), k2: half(pose(t + 400), 1), n: 2, w: 640, h: 480, age: 30, ms: 21.5 });
+          else window.__tdNativePose({ k: pose(t), n: 1, w: 640, h: 480, age: 30, ms: 18.5 });
         }, 40);
       }
       return JSON.stringify({ ok: true, w: 640, h: 480 });
@@ -105,7 +116,8 @@ function nativeStub() {
     poseConfig: function (json) {
       var c = JSON.parse(json);
       log.configs.push(c);
-      config = { accel: c.accel, threads: c.threads, workers: c.workers };
+      if (c.accel) config = { accel: c.accel, threads: c.threads, workers: c.workers };
+      if (c.players) players = c.players;
       return JSON.stringify({ ok: true });
     },
     poseBench: function (json) {
@@ -157,6 +169,14 @@ try {
     await shot(page, '01-home');
     const id = () => page.evaluate(() => document.activeElement && document.activeElement.id);
     check('默认焦点在西瓜切切切', (await id()) === 'lane-fruit');
+    const modeOn = () => page.evaluate(() => Array.from(document.querySelectorAll('#screen-home .lane-mode .opt.on')).map((e) => e.textContent).join(','));
+    check('首页默认单人', (await modeOn()) === '单人,单人' && (await page.evaluate(() => window.TD.store.settings().players)) === 1);
+    await page.keyboard.press('ArrowRight');
+    check('跑道上按右键换成双人（两个游戏一起换）', (await modeOn()) === '双人,双人' && (await page.evaluate(() => window.TD.store.settings().players)) === 2 && (await id()) === 'lane-fruit');
+    await sleep(300);
+    await shot(page, '01b-home-duo');
+    await page.keyboard.press('ArrowLeft');
+    check('再按左键换回单人', (await modeOn()) === '单人,单人' && (await page.evaluate(() => window.TD.store.settings().players)) === 1);
     await page.keyboard.press('ArrowDown');
     check('下键到金鸡独立', (await id()) === 'lane-balance');
     await page.keyboard.press('ArrowDown');
@@ -225,6 +245,47 @@ try {
     check('切到后台时停止运动', (await page.evaluate(() => window.TD.play.debug().running)) === false);
     await page.evaluate(() => window.__tdResume());
     check('回到前台重新开始这一局', await waitFor(page, () => window.TD.play.debug().running === true, 8000));
+    await page.close();
+  }
+
+  // 2b. 西瓜切切切 · 双人（模拟两个人）
+  {
+    const page = await open('/?mock=fruit2&screen=fruit&players=2&dur=12');
+    const bestBefore = await page.evaluate(() => window.TD.store.get().best.fruit['6-8']);
+    check('双人切水果：进入双人模式', await waitFor(page, () => window.TD.play.debug().players === 2 && window.TD.feed.latest && window.TD.feed.latest.kps && window.TD.feed.latest.kps.length === 2, 8000));
+    await waitFor(page, () => window.TD.play.debug().phase === 'play', 15000);
+    await sleep(5000);
+    await shot(page, '02b-fruit-duo-play');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 40000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('双人切水果：一局结束，两边都有分数和胜负', done && rec && rec.players === 2 && rec.scores.length === 2 && rec.scores[0] > 0 && rec.scores[1] > 0 && ['left', 'right', 'tie'].indexOf(rec.winner) >= 0,
+      rec ? `左 ${rec.scores[0]} 分，右 ${rec.scores[1]} 分，${rec.winner}` : '');
+    await sleep(400);
+    await shot(page, '03b-fruit-duo-result');
+    check('双人切水果：结算页有两栏和胜负', await page.evaluate(() => document.querySelectorAll('#result .duo-p').length === 2 && /赢了|平局/.test(document.querySelector('#result .winner').textContent)));
+    const best = await page.evaluate(() => window.TD.store.get().best.fruit['6-8']);
+    check('双人不算个人最好成绩', best === bestBefore, bestBefore + ' → ' + best);
+    await page.evaluate(() => window.TD.store.setSetting('players', 1));
+    await page.close();
+  }
+
+  // 3b. 金鸡独立 · 双人（模拟两个人：右边的人第一轮早 1 秒落脚、第二轮多站 1 秒）
+  {
+    const page = await open('/?mock=balance2&screen=balance&players=2&target=30');
+    await sleep(7500);
+    await shot(page, '04b-balance-duo-hold');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 50000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    await sleep(400);
+    await shot(page, '05b-balance-duo-result');
+    const ok = done && rec && rec.players === 2 && rec.sides.length === 2 && rec.sides[0].length === 2 && rec.sides[1].length === 2;
+    check('双人金鸡独立：两轮结束，两个人各两条成绩', ok, ok ? rec.sides.map((x) => x.map((l) => l.stand + ' ' + l.holdMs + 'ms ' + l.reason).join('，')).join(' | ') + '，总 ' + rec.totals.join(' / ') + '，' + rec.winner : '');
+    if (ok) {
+      const [L, R] = rec.sides; // 屏幕左右（镜像：屏幕左边是画面右半边的人）
+      check('双人金鸡独立：每轮各自判定，时间合理', L.concat(R).every((l) => l.holdMs > 2500 && l.holdMs < 8000 && l.reason === 'down'));
+      check('双人金鸡独立：胜负按总时间', rec.winner === (rec.totals[0] > rec.totals[1] ? 'left' : rec.totals[1] > rec.totals[0] ? 'right' : 'tie'));
+    }
+    await page.evaluate(() => window.TD.store.setSetting('players', 1));
     await page.close();
   }
 
@@ -351,6 +412,26 @@ try {
     check('回到前台：重新启动原生识别', await waitFor(page, (n) => window.__nativeLog.starts > n && window.TD.play.debug().running && document.body.classList.contains('native-cam'), 8000, starts));
     await page.evaluate(() => window.TD.go('home'));
     check('回首页：停掉原生识别', await waitFor(page, () => document.querySelector('#screen-home.active') && !document.body.classList.contains('native-cam') && !window.TD.feed.engine, 4000));
+    await page.close();
+  }
+
+  // 4e. 电视版原生识别 · 双人切水果：用设备测试选好的双人方式，安卓一帧推两个人
+  {
+    const page = await open('/?screen=fruit&players=2&dur=8', { nativeStub: true });
+    check('原生双人：进入双人模式', await waitFor(page, () => window.TD.feed.engineId === 'native' && window.TD.play.debug().players === 2 && window.TD.play.debug().running, 10000));
+    const opts = await page.evaluate(() => ({ start: window.__nativeLog.startOpts.slice(-1)[0], saved2: window.TD.store.get().day0.nativeConfig2 }));
+    check('原生双人：启动参数是双人和设备测试选的双人方式', opts.start && opts.start.players === 2 && opts.saved2 && opts.start.accel === opts.saved2.accel && opts.start.threads === opts.saved2.threads && opts.start.workers === opts.saved2.workers, JSON.stringify(opts));
+    check('原生双人：收到两个人的关键点', await waitFor(page, () => {
+      const l = window.TD.feed.latest;
+      return l && l.kps && l.kps.length === 2 && l.kps[0] && l.kps[1] && l.kps[0].left_hip.x < 0.5 && l.kps[1].left_hip.x > 0.5;
+    }, 5000));
+    await waitFor(page, () => window.TD.play.debug().phase === 'play', 15000);
+    await sleep(3000);
+    await shot(page, '14-native-fruit-duo');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 40000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('原生双人：一局结束', done && rec && rec.players === 2, rec ? rec.scores.join(' : ') : '');
+    await page.evaluate(() => { window.TD.store.setSetting('players', 1); window.TD.go('home'); });
     await page.close();
   }
 

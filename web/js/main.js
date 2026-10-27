@@ -63,6 +63,8 @@ function boot() {
   var s = store.settings();
   var age = qs('age');
   if (age === '6-8' || age === '9-12') store.setSetting('age', age);
+  var pl = qs('players');
+  if (pl === '1' || pl === '2') store.setSetting('players', Number(pl));
   setSoundEnabled(s.sound);
   setVoiceEnabled(s.voice);
   fit();

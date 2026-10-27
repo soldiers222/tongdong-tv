@@ -15,10 +15,10 @@
   <section id="screen-home" class="screen" aria-label="首页">
     <header class="home-head">
       <h1 class="wordmark">童动乐园</h1>
-      <p class="home-hint">遥控器上下键选择，按确定开始</p>
+      <p class="home-hint">上下键选游戏，左右键选单人或双人<br>按确定开始</p>
     </header>
     <div class="lanes">
-      <button class="lane focusable" data-go="fruit" id="lane-fruit">
+      <button class="lane focusable" data-go="fruit" id="lane-fruit" data-lr>
         <span class="lane-icon" aria-hidden="true">
           <svg viewBox="0 0 120 120">
             <path d="M8 46 A52 52 0 0 0 112 46 Z" fill="#2E7D4F" stroke="#13213C" stroke-width="4" stroke-linejoin="round"/>
@@ -37,9 +37,12 @@
           <span class="lane-title">西瓜切切切</span>
           <span class="lane-desc">挥手切水果，练反应和手眼协调</span>
         </span>
-        <span class="lane-record" id="rec-fruit"><b>0</b>最好成绩</span>
+        <span class="lane-side">
+          <span class="lane-mode"><span class="opt" data-p="1">单人</span><span class="opt" data-p="2">双人</span></span>
+          <span class="lane-record" id="rec-fruit"><b>0</b>最好成绩</span>
+        </span>
       </button>
-      <button class="lane focusable" data-go="balance" id="lane-balance" data-nav-down="tool-day0">
+      <button class="lane focusable" data-go="balance" id="lane-balance" data-nav-down="tool-day0" data-lr>
         <span class="lane-icon" aria-hidden="true">
           <svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="60" cy="18" r="10"/>
@@ -53,7 +56,10 @@
           <span class="lane-title">金鸡独立</span>
           <span class="lane-desc">单脚站稳，比比哪条腿站得久</span>
         </span>
-        <span class="lane-record" id="rec-balance"><b>0 秒</b>站得最久</span>
+        <span class="lane-side">
+          <span class="lane-mode"><span class="opt" data-p="1">单人</span><span class="opt" data-p="2">双人</span></span>
+          <span class="lane-record" id="rec-balance"><b>0 秒</b>站得最久</span>
+        </span>
       </button>
       <div class="lane-tools">
         <button class="tool focusable" data-go="day0" id="tool-day0" data-nav-up="lane-balance">

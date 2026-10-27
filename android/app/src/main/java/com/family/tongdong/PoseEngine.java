@@ -40,6 +40,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -49,6 +50,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 原生姿态识别：Camera2 取帧 → MoveNet Lightning（TensorFlow Lite）→ 17 个关键点。
@@ -65,10 +67,13 @@ import java.util.concurrent.TimeUnit;
  *
  * 「画面」指摆正以后的画面（和预览层显示的一致）：传感器装歪了（SENSOR_ORIENTATION 是 90/180/270）
  * 时，取样时转正再送进模型，宽高也按转正后的算。
+ *
+ * 双人模式（players = 2）：画面分成左右两半，每半边各认一个人（各自跟踪裁剪区域），
+ * 一帧出两组关键点，k 是画面左半边的人，k2 是右半边的人（都是整幅画面的坐标，未镜像）。
  */
 final class PoseEngine {
     interface Listener {
-        /** 在后台线程调用；json 形如 {"k":[x,y,s,…51个],"w":640,"h":480,"age":35,"ms":22} */
+        /** 在后台线程调用；json 形如 {"k":[x,y,s,…51个],"w":640,"h":480,"age":35,"ms":22,"n":1}，双人时多一个 "k2" */
         void onPose(String json);
 
         void onError(String message);
@@ -131,6 +136,42 @@ final class PoseEngine {
         }
     }
 
+    /** 一帧画面的识别：单人一个活，双人两个活（左右半边），都算完才发出去 */
+    private static final class FrameJob {
+        final long ts;
+        final long acquired;
+        final int fw, fh, n;
+        final float[][] crops;
+        final float[][] results;
+        int remaining;
+        float maxMs;
+        boolean failed;
+
+        FrameJob(long ts, long acquired, int fw, int fh, int n) {
+            this.ts = ts;
+            this.acquired = acquired;
+            this.fw = fw;
+            this.fh = fh;
+            this.n = n;
+            crops = new float[n][];
+            results = new float[n][];
+            remaining = n;
+        }
+    }
+
+    /** 一个活：某一帧的某半边（单人时是整幅），rgb 是取样好的 192×192 画面 */
+    private static final class Job {
+        final FrameJob frame;
+        final int slot;
+        final byte[] rgb;
+
+        Job(FrameJob frame, int slot, byte[] rgb) {
+            this.frame = frame;
+            this.slot = slot;
+            this.rgb = rgb;
+        }
+    }
+
     /** 一个识别器：自己的线程、模型、输入缓冲 */
     private static final class Worker {
         final HandlerThread thread;
@@ -141,7 +182,7 @@ final class PoseEngine {
         DataType inputType;
         String model = "";
         final float[][][][] output = new float[1][1][17][3];
-        volatile boolean busy;
+        final AtomicInteger queued = new AtomicInteger(); // 排队和正在算的活数，0 = 空闲
 
         Worker(int index) {
             // 显示级优先级：识别线程（和继承它优先级的线程池）别被后台任务挤掉
@@ -171,13 +212,15 @@ final class PoseEngine {
     private volatile List<Worker> workers = Collections.emptyList();
     private volatile Config config;
     private final byte[] rgb = new byte[IN * IN * 3]; // 最近一帧的取样结果（摄像头线程写，测速时拿来当输入）
+    private final ArrayDeque<byte[]> rgbPool = new ArrayDeque<>(); // 取样缓冲反复用，少产生垃圾
+    private volatile int players = 1;
 
     private volatile boolean running;
     private volatile boolean benching;  // 测速或换识别方式中：摄像头照常出帧，但不派给识别器
     private volatile int generation;    // 每次 start() 加 1，出错后的清理只清理那一次的
-    // 跟踪裁剪区域（画面归一化坐标 {y0, x0, y1, x1}，可以超出 0–1，超出部分补黑）。
+    // 跟踪裁剪区域（每个人一个，画面归一化坐标 {y0, x0, y1, x1}，可以超出 0–1，超出部分补黑；statLock 保护）。
     // 同 MoveNet 官方做法：上一帧找到人后，这一帧只看人周围的正方形区域，小个子、远一点也认得准。
-    private volatile float[] crop;
+    private final float[][] slotCrops = new float[2][];
 
     private String cameraId;
     private Size analysisSize;
@@ -315,6 +358,7 @@ final class PoseEngine {
     @SuppressLint("MissingPermission")
     synchronized String start(SurfaceTexture previewTexture, String options) {
         Config want = Config.parse(options, config != null ? config : Config.defaults());
+        setPlayers(parsePlayers(options, players));
         if (running) return want.same(config) ? null : reconfigure(want);
         String why = cameraId == null ? prepare() : null;
         if (why != null) return why;
@@ -342,8 +386,9 @@ final class PoseEngine {
         generation++;
         running = true;
         benching = false;
-        crop = null;
         synchronized (statLock) {
+            slotCrops[0] = null;
+            slotCrops[1] = null;
             lastEmitTs = Long.MIN_VALUE;
             inferCount = 0;
             sampleCount = 0;
@@ -479,49 +524,67 @@ final class PoseEngine {
             img.close();
             return;
         }
-        Worker w = freeWorker();
-        if (w == null) {
+        if (idleWorkers().isEmpty()) {
             // 识别器都在忙：留着最新的一帧，谁先空下来谁接（不用再等下一帧）
             if (pending != null) pending.close();
             pending = img;
             return;
         }
-        dispatch(w, img);
+        dispatch(img);
     }
 
-    private Worker freeWorker() {
+    private List<Worker> idleWorkers() {
+        List<Worker> out = new ArrayList<>(2);
         for (Worker w : workers) {
-            if (!w.busy && w.interpreter != null) return w;
+            if (w.queued.get() == 0 && w.interpreter != null) out.add(w);
         }
-        return null;
+        return out;
     }
 
-    /** 在摄像头线程里取样，交给识别器（img 用完就关） */
-    private void dispatch(final Worker w, Image img) {
+    /** 在摄像头线程里取样（双人时左右半边各取一份），分给空闲的识别器（img 用完就关） */
+    private void dispatch(Image img) {
         try {
+            List<Worker> idle = idleWorkers();
+            if (idle.isEmpty()) return;
             final boolean swap = sensorOrientation % 180 != 0;
             final int fw = swap ? img.getHeight() : img.getWidth();
             final int fh = swap ? img.getWidth() : img.getHeight();
-            float[] c = crop;
-            if (c == null) c = initCrop(fw, fh);
-            final float[] used = c;
-            final long ts = img.getTimestamp();
-            final long acquired = SystemClock.elapsedRealtimeNanos();
-            long s0 = System.nanoTime();
+            final int n = players;
+            FrameJob f = new FrameJob(img.getTimestamp(), SystemClock.elapsedRealtimeNanos(), fw, fh, n);
             Image.Plane[] p = img.getPlanes();
-            sampleYuv(p[0].getBuffer(), p[1].getBuffer(), p[2].getBuffer(),
-                    p[0].getRowStride(), p[0].getPixelStride(), p[1].getRowStride(), p[1].getPixelStride(),
-                    img.getWidth(), img.getHeight(), sensorOrientation, used, rgb);
-            pack(rgb, w.input, w.inputType);
-            float ms = (System.nanoTime() - s0) / 1e6f;
+            Job[] jobs = new Job[n];
+            long s0 = System.nanoTime();
+            for (int slot = 0; slot < n; slot++) {
+                float[] c;
+                synchronized (statLock) {
+                    c = slotCrops[slot];
+                }
+                if (c == null) c = initCrop(fw, fh, n, slot);
+                f.crops[slot] = c;
+                byte[] buf = takeRgb();
+                sampleYuv(p[0].getBuffer(), p[1].getBuffer(), p[2].getBuffer(),
+                        p[0].getRowStride(), p[0].getPixelStride(), p[1].getRowStride(), p[1].getPixelStride(),
+                        img.getWidth(), img.getHeight(), sensorOrientation, c, buf);
+                jobs[slot] = new Job(f, slot, buf);
+            }
+            System.arraycopy(jobs[0].rgb, 0, rgb, 0, rgb.length);
+            float ms = (System.nanoTime() - s0) / 1e6f / n;
             synchronized (statLock) {
                 sampleMs[sampleCount % sampleMs.length] = ms;
                 sampleCount++;
             }
-            w.busy = true;
-            if (!w.handler.post(() -> infer(w, fw, fh, used, ts, acquired))) w.busy = false;
+            // 空闲的识别器轮流接；只有一个空闲时，双人的两半边都排给它
+            for (int slot = 0; slot < n; slot++) {
+                final Worker w = idle.get(slot % idle.size());
+                final Job j = jobs[slot];
+                w.queued.incrementAndGet();
+                if (!w.handler.post(() -> run(w, j))) {
+                    w.queued.decrementAndGet();
+                    giveRgb(j.rgb);
+                    complete(f, slot, null, 0);
+                }
+            }
         } catch (Throwable t) {
-            w.busy = false;
             lastError = String.valueOf(t.getMessage());
         } finally {
             img.close();
@@ -537,62 +600,141 @@ final class PoseEngine {
             img.close();
             return;
         }
-        Worker w = freeWorker();
-        if (w == null) return;
+        if (idleWorkers().isEmpty()) return;
         pending = null;
-        dispatch(w, img);
+        dispatch(img);
     }
 
-    private void infer(Worker w, int fw, int fh, float[] c, long ts, long acquired) {
+    private byte[] takeRgb() {
+        synchronized (rgbPool) {
+            byte[] b = rgbPool.pollFirst();
+            return b != null ? b : new byte[IN * IN * 3];
+        }
+    }
+
+    private void giveRgb(byte[] b) {
+        synchronized (rgbPool) {
+            if (rgbPool.size() < 12) rgbPool.addFirst(b);
+        }
+    }
+
+    /** 在识别器线程里算一个活 */
+    private void run(Worker w, Job j) {
+        float[] k = null;
+        float ms = 0;
         try {
             Interpreter it = w.interpreter;
-            if (!running || benching || it == null) return;
-            long t0 = SystemClock.elapsedRealtimeNanos();
-            w.input.rewind();
-            it.run(w.input, w.output);
-            long t1 = SystemClock.elapsedRealtimeNanos();
-            float ms = (t1 - t0) / 1e6f;
-            // 画面拍下到现在过了多久（网页据此做延迟补偿）
-            long base = realtimeTimestamps ? ts : acquired;
-            float age = Math.max(0, (t1 - base) / 1e6f);
-            // 裁剪区域内的坐标 → 画面归一化坐标
-            float[] k = new float[17 * 3];
-            for (int i = 0; i < 17; i++) {
-                k[i * 3] = c[1] + w.output[0][0][i][1] * (c[3] - c[1]);
-                k[i * 3 + 1] = c[0] + w.output[0][0][i][0] * (c[2] - c[0]);
-                k[i * 3 + 2] = w.output[0][0][i][2];
-            }
-            boolean newest;
-            synchronized (statLock) {
-                inferMs[inferCount % inferMs.length] = ms;
-                inferCount++;
-                // 几个识别器同时算，后拍的帧可能先算完：只发比已发出的更新的
-                newest = ts > lastEmitTs;
-                if (newest) {
-                    lastEmitTs = ts;
-                    crop = nextCrop(k, fw, fh);
-                    emitTimes[emitCount % emitTimes.length] = SystemClock.elapsedRealtime();
-                    emitCount++;
+            if (running && !benching && it != null) {
+                pack(j.rgb, w.input, w.inputType);
+                long t0 = SystemClock.elapsedRealtimeNanos();
+                it.run(w.input, w.output);
+                ms = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f;
+                // 裁剪区域内的坐标 → 整幅画面的归一化坐标
+                float[] c = j.frame.crops[j.slot];
+                k = new float[17 * 3];
+                for (int i = 0; i < 17; i++) {
+                    k[i * 3] = c[1] + w.output[0][0][i][1] * (c[3] - c[1]);
+                    k[i * 3 + 1] = c[0] + w.output[0][0][i][0] * (c[2] - c[0]);
+                    k[i * 3 + 2] = w.output[0][0][i][2];
                 }
             }
-            if (!newest) return;
-            StringBuilder sb = new StringBuilder(640);
-            sb.append("{\"k\":[");
-            for (int i = 0; i < 17; i++) {
-                if (i > 0) sb.append(',');
-                sb.append(String.format(Locale.ROOT, "%.4f,%.4f,%.3f", k[i * 3], k[i * 3 + 1], k[i * 3 + 2]));
-            }
-            sb.append("],\"w\":").append(fw).append(",\"h\":").append(fh)
-                    .append(",\"age\":").append(Math.round(age))
-                    .append(",\"ms\":").append(String.format(Locale.ROOT, "%.1f", ms)).append('}');
-            listener.onPose(sb.toString());
         } catch (Throwable t) {
             lastError = String.valueOf(t.getMessage());
             listener.onError("识别出错：" + t.getMessage());
         } finally {
-            w.busy = false;
+            giveRgb(j.rgb);
+            complete(j.frame, j.slot, k, ms);
+            w.queued.decrementAndGet();
             Handler h = camHandler;
             if (h != null) h.post(this::drainPending);
+        }
+    }
+
+    /** 一帧的某个活算完：都算完了就更新跟踪区域、发给网页（几个识别器同时算，后拍的帧可能先算完，只发更新的） */
+    private void complete(FrameJob f, int slot, float[] k, float ms) {
+        String json;
+        synchronized (statLock) {
+            if (k != null) {
+                inferMs[inferCount % inferMs.length] = ms;
+                inferCount++;
+                f.maxMs = Math.max(f.maxMs, ms);
+            } else {
+                f.failed = true;
+            }
+            f.results[slot] = k;
+            if (--f.remaining > 0) return;
+            if (f.failed || f.ts <= lastEmitTs || f.n != players) return;
+            lastEmitTs = f.ts;
+            for (int s = 0; s < f.n; s++) {
+                float[] kk = f.results[s];
+                if (f.n > 1 && !inSlot(kk, f.n, s)) {
+                    // 这半边认到的其实是另一半边的人：当作这半边没人，裁剪区域回到这半边
+                    for (int i = 0; i < 17; i++) kk[i * 3 + 2] = 0;
+                    slotCrops[s] = null;
+                } else {
+                    slotCrops[s] = nextCrop(kk, f.fw, f.fh, f.n, s);
+                }
+            }
+            emitTimes[emitCount % emitTimes.length] = SystemClock.elapsedRealtime();
+            emitCount++;
+            long base = realtimeTimestamps ? f.ts : f.acquired;
+            float age = Math.max(0, (SystemClock.elapsedRealtimeNanos() - base) / 1e6f);
+            StringBuilder sb = new StringBuilder(1200);
+            sb.append("{\"k\":");
+            appendKeypoints(sb, f.results[0]);
+            if (f.n > 1) {
+                sb.append(",\"k2\":");
+                appendKeypoints(sb, f.results[1]);
+            }
+            sb.append(",\"n\":").append(f.n)
+                    .append(",\"w\":").append(f.fw).append(",\"h\":").append(f.fh)
+                    .append(",\"age\":").append(Math.round(age))
+                    .append(",\"ms\":").append(String.format(Locale.ROOT, "%.1f", f.maxMs)).append('}');
+            json = sb.toString();
+        }
+        listener.onPose(json);
+    }
+
+    private static void appendKeypoints(StringBuilder sb, float[] k) {
+        sb.append('[');
+        for (int i = 0; i < 17; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(String.format(Locale.ROOT, "%.4f,%.4f,%.3f", k[i * 3], k[i * 3 + 1], k[i * 3 + 2]));
+        }
+        sb.append(']');
+    }
+
+    /** 双人时：这组关键点的人（髋或肩的中点）是不是在自己这半边（留一点余量）。看不清身体就不判 */
+    static boolean inSlot(float[] k, int n, int slot) {
+        if (n <= 1) return true;
+        final float th = 0.3f;
+        float cx;
+        if (k[11 * 3 + 2] > th && k[12 * 3 + 2] > th) cx = (k[11 * 3] + k[12 * 3]) / 2f;
+        else if (k[5 * 3 + 2] > th && k[6 * 3 + 2] > th) cx = (k[5 * 3] + k[6 * 3]) / 2f;
+        else return true;
+        float x0 = (float) slot / n, x1 = (float) (slot + 1) / n;
+        return cx >= x0 - 0.04f && cx <= x1 + 0.04f;
+    }
+
+    /** 人数（1 或 2）；变了就把跟踪区域重置 */
+    void setPlayers(int n) {
+        n = n == 2 ? 2 : 1;
+        if (n == players) return;
+        synchronized (statLock) {
+            players = n;
+            slotCrops[0] = null;
+            slotCrops[1] = null;
+        }
+        Log.i(TAG, "人数 " + n);
+    }
+
+    static int parsePlayers(String json, int def) {
+        try {
+            if (json == null || json.trim().length() == 0) return def;
+            JSONObject o = new JSONObject(json);
+            return o.has("players") ? (o.optInt("players", def) == 2 ? 2 : 1) : def;
+        } catch (Exception e) {
+            return def;
         }
     }
 
@@ -606,12 +748,38 @@ final class PoseEngine {
         return new float[]{0f, x0, 1f, x0 + (float) fh / fw};
     }
 
+    /** 双人时每人看画面的一半：正方形裁剪框盖住这一半（单人时同 initCrop(fw, fh)） */
+    static float[] initCrop(int fw, int fh, int n, int slot) {
+        if (n <= 1) return initCrop(fw, fh);
+        float rw = (float) fw / n, rh = fh;
+        float side = Math.max(rw, rh);
+        float cx = (slot + 0.5f) * rw, cy = fh / 2f;
+        return new float[]{(cy - side / 2) / fh, (cx - side / 2) / fw, (cy + side / 2) / fh, (cx + side / 2) / fw};
+    }
+
     /** 由这一帧的关键点算下一帧的裁剪区域（MoveNet 官方教程的 determine_crop_region） */
     static float[] nextCrop(float[] k, int fw, int fh) {
+        return nextCrop(k, fw, fh, 1, 0);
+    }
+
+    /** 同上，双人时裁剪框不超过自己那半边，中心跑到另一半边就回到这半边的初始区域 */
+    static float[] nextCrop(float[] k, int fw, int fh, int n, int slot) {
+        float[] fallback = initCrop(fw, fh, n, slot);
+        float maxHalf = n <= 1 ? Math.max(fw, fh) / 2f : Math.max((float) fw / n, fh) / 2f;
+        float[] c = cropAround(k, fw, fh, maxHalf);
+        if (c == null) return fallback;
+        if (n > 1) {
+            float cx = (c[1] + c[3]) / 2f;
+            if (cx < (float) slot / n || cx > (float) (slot + 1) / n) return fallback;
+        }
+        return c;
+    }
+
+    private static float[] cropAround(float[] k, int fw, int fh, float maxHalf) {
         final float th = 0.2f;
         // 5/6 = 左右肩，11/12 = 左右髋
         boolean torso = (k[11 * 3 + 2] > th || k[12 * 3 + 2] > th) && (k[5 * 3 + 2] > th || k[6 * 3 + 2] > th);
-        if (!torso) return initCrop(fw, fh);
+        if (!torso) return null;
         float cx = (k[11 * 3] + k[12 * 3]) / 2f * fw, cy = (k[11 * 3 + 1] + k[12 * 3 + 1]) / 2f * fh;
         float ty = 0, tx = 0, by = 0, bx = 0;
         int[] torsoJoints = {5, 6, 11, 12};
@@ -626,7 +794,7 @@ final class PoseEngine {
         }
         float half = Math.max(Math.max(tx * 1.9f, ty * 1.9f), Math.max(by * 1.2f, bx * 1.2f));
         half = Math.min(half, Math.max(Math.max(cx, fw - cx), Math.max(cy, fh - cy)));
-        if (half > Math.max(fw, fh) / 2f || half < 8) return initCrop(fw, fh);
+        if (half > maxHalf || half < 8) return null;
         float len = half * 2;
         return new float[]{(cy - half) / fh, (cx - half) / fw, (cy - half + len) / fh, (cx - half + len) / fw};
     }
@@ -744,6 +912,7 @@ final class PoseEngine {
     /** 网页指定识别方式（设备测试调优后）；没在识别时先建好，下次开始时直接用 */
     synchronized String configure(String json) {
         Config want = Config.parse(json, config != null ? config : Config.defaults());
+        setPlayers(parsePlayers(json, players));
         if (!running) return applyConfig(want);
         return want.same(config) ? null : reconfigure(want);
     }
@@ -868,7 +1037,7 @@ final class PoseEngine {
         while (SystemClock.elapsedRealtime() < end) {
             boolean idle = true;
             for (Worker w : workers) {
-                if (w.busy) idle = false;
+                if (w.queued.get() > 0) idle = false;
             }
             if (idle) return;
             SystemClock.sleep(5);
@@ -973,7 +1142,7 @@ final class PoseEngine {
         for (int i = 0; i < ws.size(); i++) {
             final int idx = i;
             final Worker w = ws.get(i);
-            w.busy = true;
+            w.queued.incrementAndGet();
             boolean posted = w.handler.post(() -> {
                 float[] l = new float[4096];
                 int n = 0;
@@ -1001,12 +1170,12 @@ final class PoseEngine {
                 } finally {
                     lat[idx] = Arrays.copyOf(l, Math.min(n, l.length));
                     counts[idx] = n;
-                    w.busy = false;
+                    w.queued.decrementAndGet();
                     done.countDown();
                 }
             });
             if (!posted) {
-                w.busy = false;
+                w.queued.decrementAndGet();
                 warm.countDown();
                 done.countDown();
                 lat[idx] = new float[0];
@@ -1151,6 +1320,7 @@ final class PoseEngine {
             put(o, "model", ws.get(0).model.replace("models/", ""));
         }
         put(o, "f16", assetExists(ctx, MODEL_F16));
+        put(o, "players", players);
         put(o, "bad", new JSONArray(bad));
         put(o, "running", running);
         synchronized (statLock) {

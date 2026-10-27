@@ -154,14 +154,32 @@ button {
 .lane-text { padding-left: 64px; flex: 1; }
 .lane-title { font-family: var(--font-display); font-size: 92px; line-height: 1.05; display: block; }
 .lane-desc { font-size: 32px; line-height: 1.4; display: block; margin-top: 6px; opacity: 0.86; }
-.lane-record {
+.lane-side {
   width: 420px;
   padding-right: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.lane-record {
   text-align: right;
   font-size: 28px;
   line-height: 1.3;
 }
 .lane-record b { font-family: var(--font-display); font-weight: normal; font-size: 56px; display: block; }
+/* 单人 / 双人：跑道上按左右键切换 */
+.lane-mode {
+  display: flex;
+  border: 3px solid currentColor;
+  border-radius: 28px;
+  overflow: hidden;
+  margin-bottom: 14px;
+  font-size: 28px;
+  line-height: 1;
+}
+.lane-mode .opt { padding: 10px 22px; opacity: 0.75; }
+.lane-mode .opt.on { background: var(--chalk); color: var(--track); opacity: 1; }
+.lane:focus .lane-mode .opt.on { background: var(--ink); color: var(--whistle); }
 
 .lane-tools { display: flex; height: 168px; border-bottom: var(--line) solid var(--chalk); }
 .tool {
@@ -360,6 +378,17 @@ button {
 .leg-card .n { font-family: var(--font-display); font-size: 96px; line-height: 1.05; color: var(--whistle); }
 .leg-card .n small { font-size: 40px; color: var(--chalk); margin-left: 8px; }
 .stars { font-size: 44px; letter-spacing: 6px; color: var(--whistle); }
+/* 双人结算：左右两栏 */
+.duo { display: flex; margin: 10px 0 6px; }
+.duo-p { flex: 1; background: rgba(15, 29, 54, 0.35); border-radius: 22px; padding: 20px 28px; }
+.duo-p + .duo-p { margin-left: 40px; }
+.duo-p.win { box-shadow: inset 0 0 0 4px var(--whistle); }
+.duo-p .who { font-family: var(--font-display); font-size: 44px; line-height: 1.2; }
+.duo-p .big { font-size: 120px; }
+.duo-p .big small { font-size: 44px; }
+.duo-p .lines { font-size: 26px; margin: 8px 0 0; }
+.duo-p .stars { font-size: 30px; letter-spacing: 2px; }
+.result .lines.winner { font-family: var(--font-display); font-size: 44px; color: var(--whistle); margin: 16px 0 26px; }
 .stars .off { color: rgba(247, 245, 239, 0.25); }
 
 /* ---------- 记录 ---------- */

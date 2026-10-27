@@ -52,10 +52,35 @@ export function previewOff() {
 
 export function previewActive() { return !!shown; }
 
-// 设备测试选好的识别方式（没测过返回 null，安卓用默认方式）
-export function savedConfig() {
+// 设备测试选好的识别方式（没测过返回 null，安卓用默认方式）。
+// 双人时每帧要算两次（左右半边），要的算力翻倍，单独选一套
+export function savedConfig(players) {
   var d0 = store.get().day0;
-  return d0 && d0.nativeConfig ? d0.nativeConfig : null;
+  if (!d0) return null;
+  if (players !== 2) return d0.nativeConfig || null;
+  if (d0.nativeConfig2) return d0.nativeConfig2;
+  // 0.2.1 测的结果里还没有双人的：用存下来的调优数据现选
+  var t = d0.nativeTune;
+  if (!t || !t.list) return null;
+  var list = [];
+  for (var i = 0; i < t.list.length; i++) {
+    var r = t.list[i];
+    var cfg = r.cfg || parseLabel(r.label);
+    if (cfg) list.push({ ok: r.ok, fps: r.fps, p50: r.p50, renderFps: r.renderFps, cfg: cfg });
+  }
+  var best = pickConfig(list, d0.baseFps, (t.camFps || 25) * 2);
+  return best ? best.cfg : null;
+}
+
+// configLabel 的反过程（旧版存的调优结果只有文字）
+export function parseLabel(label) {
+  if (!label) return null;
+  var w = /(\d+) 路/.exec(label), t = /(\d+) 线程/.exec(label);
+  var workers = w ? Number(w[1]) : 1;
+  if (label.indexOf('GPU') === 0) return { accel: 'gpu', threads: 2, workers: workers };
+  if (label.indexOf('NNAPI') === 0) return { accel: 'nnapi', threads: 2, workers: workers };
+  if (label.indexOf('CPU') === 0 && t) return { accel: 'cpu', threads: Number(t[1]), workers: workers };
+  return null;
 }
 
 export function configLabel(c) {

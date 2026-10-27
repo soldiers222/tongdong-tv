@@ -2,7 +2,7 @@
 import { feed } from '../pose/feed.js';
 import { openCamera, closeCamera, cameraOpen, cameraErrorText } from '../pose/camera.js';
 import * as native from '../pose/native.js';
-import { ENGINES, unsupportedReason, engineInfo } from '../pose/engines.js';
+import { ENGINES, unsupportedReason, engineInfo, setPlayers as setEnginePlayers } from '../pose/engines.js';
 import { Stage } from '../core/stage.js';
 import { drawSkeleton } from '../core/skeleton.js';
 import { checkSpace } from '../core/space.js';
@@ -296,13 +296,15 @@ async function tuneNative(my, rowId) {
   if (my !== gen) return null;
   var camFpsNow = (native.info() || {}).camFps || 0;
   var best = native.pickConfig(out, baseFps, camFpsNow);
+  // 双人：每帧算两次（左右半边各一个人），按两倍摄像头帧率选
+  var best2 = native.pickConfig(out, baseFps, (camFpsNow || 25) * 2);
   var applied = null;
   if (best) {
     setRow(rowId, ['换成 ' + best.label, '—', '—'], 'running');
     var res = native.configure(best.cfg);
     if (res && res.ok) applied = best.cfg;
   }
-  return { list: out, best: best ? best.cfg : null, applied: applied, camFps: camFpsNow };
+  return { list: out, best: best ? best.cfg : null, best2: best2 ? best2.cfg : null, applied: applied, camFps: camFpsNow };
 }
 
 function tuneLines(t) {
@@ -314,7 +316,8 @@ function tuneLines(t) {
     if (!r.ok) lines.push('  ' + r.label + '：' + (r.error || '失败'));
     else lines.push('  ' + r.label + '：' + r.fps.toFixed(1) + ' 次/秒，' + Math.round(r.p50) + ' 毫秒，' + (r.cpu || 0).toFixed(1) + ' 核，画面 ' + Math.round(r.renderFps || 0) + (r.model && r.model.indexOf('f16') >= 0 ? '，半精度模型' : ''));
   }
-  lines.push('  选用：' + (t.applied ? native.configLabel(t.applied) : (t.best ? native.configLabel(t.best) + '（没换成功）' : '都不行，用默认方式')) + (t.camFps ? '（摄像头 ' + Math.round(t.camFps) + ' 帧/秒）' : ''));
+  lines.push('  选用：' + (t.applied ? native.configLabel(t.applied) : (t.best ? native.configLabel(t.best) + '（没换成功）' : '都不行，用默认方式')) + (t.camFps ? '（摄像头 ' + Math.round(t.camFps) + ' 帧/秒）' : '')
+    + (t.best2 ? '；双人：' + native.configLabel(t.best2) : ''));
   return lines;
 }
 
@@ -483,11 +486,13 @@ async function runBench() {
     camera: camInfo,
     camFps: camFps,
     nativeConfig: nativeTune && nativeTune.applied ? nativeTune.applied : (store.get().day0 && store.get().day0.nativeConfig) || null,
+    nativeConfig2: nativeTune && nativeTune.best2 ? nativeTune.best2 : (store.get().day0 && store.get().day0.nativeConfig2) || null,
     nativeTune: nativeTune ? {
       best: nativeTune.best,
+      best2: nativeTune.best2 || null,
       applied: nativeTune.applied,
       camFps: nativeTune.camFps,
-      list: nativeTune.list.map(function (x) { return { label: x.label, ok: !!x.ok, fps: x.fps || 0, p50: x.p50 || 0, cpu: x.cpu || 0, renderFps: x.renderFps || 0, model: x.model || '', error: x.error || null }; })
+      list: nativeTune.list.map(function (x) { return { label: x.label, cfg: x.cfg || null, ok: !!x.ok, fps: x.fps || 0, p50: x.p50 || 0, cpu: x.cpu || 0, renderFps: x.renderFps || 0, model: x.model || '', error: x.error || null }; })
     } : null,
     results: results.map(function (x) {
       return { id: x.id, fps: x.fps || 0, p50: x.p50 || 0, p95: x.p95 || 0, renderFps: x.renderFps || 0, kpAvg: x.kpAvg || 0, grabMs: x.grabMs || null, threads: x.threads || null, cpu: x.cpu || null, camFps: x.camFps || null, sampleMs: x.sampleMs || null, config: x.config || null, error: x.error || null };
@@ -562,6 +567,8 @@ export var day0Screen = {
   enter: function () {
     gen++;
     active = true;
+    setEnginePlayers(1); // 设备测试总是单人（双人游戏玩完再来也一样）
+    if (feed.engine && feed.engine.setPlayers) feed.engine.setPlayers(1);
     benching = false;
     feed.yieldFrames = 0;
     showSummary = false;

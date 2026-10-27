@@ -13,7 +13,8 @@ var DEFAULTS = {
     sound: true,
     voice: true,
     perf: false,
-    hd: false
+    hd: false,
+    players: 1         // 1 = 单人，2 = 双人（首页游戏上按左右键切换）
   },
   best: {
     fruit: { '6-8': 0, '9-12': 0 },
@@ -101,7 +102,11 @@ export function recordSession(rec) {
   keepLast(s.sessions, 60);
   var d = today();
   var newBest = false;
-  if (rec.type === 'fruit') {
+  if (rec.players === 2) {
+    // 双人一局：算运动次数，不算个人最好成绩
+    if (rec.type === 'fruit') d.fruit += 1;
+    else d.balance += 1;
+  } else if (rec.type === 'fruit') {
     d.fruit += 1;
     var age = rec.age === '9-12' ? '9-12' : '6-8';
     if (rec.score > (s.best.fruit[age] || 0)) {

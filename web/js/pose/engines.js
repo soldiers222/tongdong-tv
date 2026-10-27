@@ -7,6 +7,11 @@ import { PointFilter } from '../core/filters.js';
 import { MOCK_SCRIPTS } from './mock.js';
 import * as native from './native.js';
 
+// 人数：1 = 单人；2 = 双人（画面左右两半各一个人）。只有原生识别和模拟引擎支持双人，
+// 双人时 estimate() 返回 [画面左半边的人, 画面右半边的人]（摄像头原始画面的左右，未镜像），没人的位置是 null。
+var wantPlayers = 1;
+export function setPlayers(n) { wantPlayers = n === 2 ? 2 : 1; }
+
 // 网站根目录（index.html 所在目录）。不用 import.meta，兼容更老的 WebView
 export var BASE = new URL('.', document.baseURI || location.href).href;
 
@@ -81,19 +86,40 @@ export function createEngine(id) {
 // 不用网页的摄像头：开始前要先关掉网页摄像头，否则两边抢同一个摄像头。
 function NativeEngine(info) {
   this.info = info;
+  this.players = wantPlayers;
   this.waiters = [];
   this.pending = null; // 推过来时没人在等的那一组（识别循环正在让画面刷新），下次 estimate 直接拿
   this.frameW = 640;
   this.frameH = 480;
   this.captureTime = null;
   this.ms = [];
-  this.filters = {};
+  this.filters = [{}, {}];
   this.error = null;
 }
 
 NativeEngine.prototype.mainThread = false;
 NativeEngine.prototype.usesVideo = false;
 NativeEngine.prototype.native = true;
+NativeEngine.prototype.supportsPlayers = 2;
+
+// 安卓的启动参数：识别方式（设备测试选好的，单人双人各一套）+ 人数
+NativeEngine.prototype._options = function () {
+  var o = {};
+  var cfg = native.savedConfig(this.players);
+  if (cfg) { o.accel = cfg.accel; o.threads = cfg.threads; o.workers = cfg.workers; }
+  o.players = this.players;
+  return o;
+};
+
+// 运行中换人数（同时换成适合这个人数的识别方式）
+NativeEngine.prototype.setPlayers = function (n) {
+  n = n === 2 ? 2 : 1;
+  if (n === this.players) return;
+  this.players = n;
+  this.pending = null;
+  this.filters = [{}, {}];
+  native.configure(this._options());
+};
 
 NativeEngine.prototype.init = function (onStatus) {
   var self = this;
@@ -106,8 +132,7 @@ NativeEngine.prototype.init = function (onStatus) {
   function tryStart() {
     var r;
     // 用设备测试选好的识别方式（没测过就用安卓里的默认方式）
-    var opts = native.savedConfig() || {};
-    try { r = JSON.parse(n.poseStart(JSON.stringify(opts))); } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
+    try { r = JSON.parse(n.poseStart(JSON.stringify(self._options()))); } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
     if (r.ok) {
       if (r.w && r.h) { self.frameW = r.w; self.frameH = r.h; }
       var ni = native.info();
@@ -144,6 +169,21 @@ NativeEngine.prototype.init = function (onStatus) {
   return attempt();
 };
 
+// 51 个数 → 关键点表（各人各自滤波）；双人时整个人都看不清返回 null（这半边没人）
+NativeEngine.prototype._kp = function (arr, filters, tSec, keepEmpty) {
+  var kp = {};
+  var seen = 0;
+  for (var i = 0; i < CORE.length; i++) {
+    var x = arr[i * 3], y = arr[i * 3 + 1], s = arr[i * 3 + 2];
+    var inFrame = x > -0.02 && x < 1.02 && y > -0.02 && y < 1.02;
+    var f = filters[CORE[i]] || (filters[CORE[i]] = new PointFilter(2.5, 20));
+    var p = f.filter(x, y, tSec);
+    kp[CORE[i]] = { x: p.x, y: p.y, s: inFrame ? s : Math.min(s, 0.1) };
+    if (s >= 0.3) seen++;
+  }
+  return seen || keepEmpty ? kp : null;
+};
+
 NativeEngine.prototype._onPose = function (m) {
   if (!m || !m.k) return;
   var t = now();
@@ -153,14 +193,15 @@ NativeEngine.prototype._onPose = function (m) {
   this.lastMs = m.ms || 0;
   this.ms.push(this.lastMs);
   if (this.ms.length > 120) this.ms.shift();
-  var kp = {};
   var tSec = this.captureTime / 1000;
-  for (var i = 0; i < CORE.length; i++) {
-    var x = m.k[i * 3], y = m.k[i * 3 + 1], s = m.k[i * 3 + 2];
-    var inFrame = x > -0.02 && x < 1.02 && y > -0.02 && y < 1.02;
-    var f = this.filters[CORE[i]] || (this.filters[CORE[i]] = new PointFilter(2.5, 20));
-    var p = f.filter(x, y, tSec);
-    kp[CORE[i]] = { x: p.x, y: p.y, s: inFrame ? s : Math.min(s, 0.1) };
+  var kp;
+  if (this.players === 2) {
+    // 双人：k 是画面左半边的人，k2 是右半边的人（人数刚切换时安卓可能还发一两帧单人的）
+    if (!m.k2) return;
+    kp = [this._kp(m.k, this.filters[0], tSec), this._kp(m.k2, this.filters[1], tSec)];
+  } else {
+    if (m.k2) return;
+    kp = this._kp(m.k, this.filters[0], tSec, true);
   }
   var ws = this.waiters;
   this.waiters = [];
@@ -409,20 +450,42 @@ MoveNetWorkerEngine.prototype.dispose = function () {
 
 /* ---------- 模拟引擎：按脚本生成骨架，测试和演示用 ---------- */
 function MockEngine(name) {
-  this.script = MOCK_SCRIPTS[name] || MOCK_SCRIPTS.still;
+  this.name = MOCK_SCRIPTS[name] ? name : 'still';
+  this.script = MOCK_SCRIPTS[this.name];
+  this.players = wantPlayers;
   this.t0 = null;
   this.latency = 35;
 }
 
 MockEngine.prototype.mainThread = false;
+MockEngine.prototype.supportsPlayers = 2;
+
+MockEngine.prototype.setPlayers = function (n) { this.players = n === 2 ? 2 : 1; };
 
 MockEngine.prototype.init = function () { return Promise.resolve(); };
 
 MockEngine.prototype.estimate = function (video, t) {
   var self = this;
   if (self.t0 === null) self.t0 = t;
-  var kp = self.script(t - self.t0);
+  var dt = t - self.t0;
+  var kp = self.script(dt);
+  if (self.players === 2) {
+    // 双人脚本直接返回两个人；单人脚本先找同名加 2 的双人脚本，没有就把人放到左右两半边
+    if (!Array.isArray(kp)) {
+      var duo = MOCK_SCRIPTS[self.name + '2'];
+      kp = duo ? duo(dt) : [squeeze(kp, 0), squeeze(self.script(dt + 700), 1)];
+    }
+  } else if (Array.isArray(kp)) {
+    kp = kp[0];
+  }
   return sleep(self.latency).then(function () { return kp; });
 };
 
 MockEngine.prototype.dispose = function () {};
+
+// 把一个人横向压到画面一半（slot 0 = 左半边，1 = 右半边）
+function squeeze(kp, slot) {
+  var out = {};
+  for (var k in kp) out[k] = { x: kp[k].x * 0.5 + slot * 0.5, y: kp[k].y, s: kp[k].s };
+  return out;
+}

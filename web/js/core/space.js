@@ -1,5 +1,6 @@
 // 开局站位检测：全身入镜、离电视远近、左右是否居中。
-// kp 为归一化关键点；mirror 为画面是否镜像（决定「往左/往右」的说法）。
+// kp 为归一化关键点；mirror 为画面是否镜像（决定「往左/往右」的说法）；
+// region 为这个人该站的屏幕区域 {x0, x1}（0–1，双人时一人一半），不给就是整个屏幕。
 import { ok } from './keypoints.js';
 
 var T = 0.4;
@@ -10,7 +11,7 @@ function headY(kp) {
   return null;
 }
 
-export function checkSpace(kp, mode, mirror) {
+export function checkSpace(kp, mode, mirror, region) {
   var hy = headY(kp);
   var sh = ok(kp, 'left_shoulder', T) && ok(kp, 'right_shoulder', T);
   var hips = ok(kp, 'left_hip', T) && ok(kp, 'right_hip', T);
@@ -23,9 +24,10 @@ export function checkSpace(kp, mode, mirror) {
   else if (sh) cx = (kp.left_shoulder.x + kp.right_shoulder.x) / 2;
   else cx = kp.nose.x;
   var screenX = mirror ? 1 - cx : cx;
+  var lo = region ? region.x0 + 0.06 : 0.25, hi = region ? region.x1 - 0.06 : 0.75;
   // 镜像画面里，人在屏幕左边 → 让他往自己的右边走
-  if (screenX < 0.25) return { ok: false, code: 'left', msg: mirror ? '往右边走一点' : '往左边走一点' };
-  if (screenX > 0.75) return { ok: false, code: 'right', msg: mirror ? '往左边走一点' : '往右边走一点' };
+  if (screenX < lo) return { ok: false, code: 'left', msg: mirror ? '往右边走一点' : '往左边走一点' };
+  if (screenX > hi) return { ok: false, code: 'right', msg: mirror ? '往左边走一点' : '往右边走一点' };
 
   if (mode === 'full') {
     if (hy === null) return { ok: false, code: 'head', msg: '头要在画面里，往后退一点' };
@@ -57,8 +59,8 @@ export function SpaceGate(holdMs) {
   this.last = null;
 }
 
-SpaceGate.prototype.update = function (kp, mode, mirror, t) {
-  var r = checkSpace(kp, mode, mirror);
+SpaceGate.prototype.update = function (kp, mode, mirror, t, region) {
+  var r = checkSpace(kp, mode, mirror, region);
   this.last = r;
   if (r.ok) {
     if (this.since === null) this.since = t;

@@ -232,3 +232,40 @@ test('金鸡独立：身体大幅歪出去判失稳', () => {
   assert.equal(st.phase, 'done');
   assert.equal(st.result.reason, 'sway');
 });
+
+// ---------- 双人 ----------
+import { screenPlayers, winnerOf, DUO } from '../../web/js/games/duo.js';
+
+test('双人：站位按半边检查，各自提示往哪边走', () => {
+  const [l, r] = MOCK_SCRIPTS.still2(0); // 摄像头画面左半边、右半边的人
+  // 镜像：屏幕左边是摄像头画面右半边的人
+  assert.equal(checkSpace(r, 'full', true, DUO[0].region).ok, true);
+  assert.equal(checkSpace(l, 'full', true, DUO[1].region).ok, true);
+  // 站错半边：屏幕左边的区域里看到的是右半边的人 → 要往（屏幕）右边挪的反方向
+  const wrong = checkSpace(l, 'full', true, DUO[0].region);
+  assert.equal(wrong.ok, false);
+  assert.equal(wrong.code, 'right');
+  // 不给区域时同单人：人在中间才合格
+  assert.equal(checkSpace(skeleton({}), 'full', true).ok, true);
+  assert.equal(checkSpace(skeleton({ cx: 0.15 }), 'full', true).ok, false);
+});
+
+test('双人：识别结果按屏幕左右分给两个人', () => {
+  const a = { tag: 'cam-left' }, b = { tag: 'cam-right' };
+  assert.deepEqual(screenPlayers({ kps: [a, b] }, true), [b, a]);
+  assert.deepEqual(screenPlayers({ kps: [a, b] }, false), [a, b]);
+  assert.deepEqual(screenPlayers({ kps: [a, null] }, true), [null, a]);
+  assert.deepEqual(screenPlayers({ kp: a }, true), [null, null]);
+  assert.equal(winnerOf(3, 2), 'left');
+  assert.equal(winnerOf(2, 3), 'right');
+  assert.equal(winnerOf(2, 2), 'tie');
+});
+
+test('双人：同一个随机种子两边出的水果一样', () => {
+  const a = new FruitWorld({ W: 640, H: 720, age: '9-12', seed: 7 });
+  const b = new FruitWorld({ W: 640, H: 720, age: '9-12', seed: 7 });
+  for (let t = 0; t < 6000; t += 16) { a.update(16); b.update(16); }
+  assert.ok(a.items.length > 0);
+  assert.deepEqual(a.items.map((i) => [i.type, Math.round(i.x0)]), b.items.map((i) => [i.type, Math.round(i.x0)]));
+  for (const it of a.items) assert.ok(it.x0 >= 0 && it.x0 <= 640, '水果从这半边里出来');
+});

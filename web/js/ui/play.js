@@ -3,12 +3,14 @@ import { Stage } from '../core/stage.js';
 import { feed } from '../pose/feed.js';
 import { openCamera, closeCamera, cameraErrorText } from '../pose/camera.js';
 import * as native from '../pose/native.js';
-import { unsupportedReason, engineInfo } from '../pose/engines.js';
+import { unsupportedReason, engineInfo, setPlayers as setEnginePlayers } from '../pose/engines.js';
 import * as store from '../core/store.js';
 import { setScope, setInterceptor } from '../core/nav.js';
 import { ui, showRest } from './ui.js';
 import { FruitMode } from '../games/fruit.js';
+import { FruitDuoMode } from '../games/fruit-duo.js';
 import { BalanceMode } from '../training/balance.js';
+import { BalanceDuoMode } from '../training/balance-duo.js';
 import { now, keepLast } from '../core/util.js';
 import { cancel as cancelVoice } from '../core/voice.js';
 import { go } from '../router.js';
@@ -123,6 +125,8 @@ async function start(name) {
   var my = token;
   modeName = name;
   var s = store.settings();
+  var players = s.players === 2 ? 2 : 1;
+  var notice = '';
   if (!stage) stage = new Stage($('stage'), { alpha: native.available() });
   stage.mirror = !!s.mirror;
   stage.setResolution(s.hd ? 1.5 : 1);
@@ -130,10 +134,11 @@ async function start(name) {
   env.video = $('cam');
   env.settings = s;
   env.mock = !!feed.mock;
-  mode = name === 'balance' ? new BalanceMode(env) : new FruitMode(env);
-  stage.setFit(mode.fit);
+  mode = null;
+  stage.setFit(name === 'balance' ? 'contain' : 'cover');
   // 先画一帧背景，避免黑屏
   stage.drawVideo(null, 0);
+  setEnginePlayers(players);
 
   var order = engineOrder();
   var loaded = false, lastErr = null, usedNative = false;
@@ -198,7 +203,19 @@ async function start(name) {
     return;
   }
 
+  // 双人要识别引擎支持（电视版的原生识别；网页里的识别一次只认一个人）
+  if (players === 2 && !(feed.engine && feed.engine.supportsPlayers >= 2)) {
+    players = 1;
+    setEnginePlayers(1);
+    notice = '双人模式要用电视版的原生识别，这次先按单人玩';
+  }
+  if (feed.engine && feed.engine.setPlayers) feed.engine.setPlayers(players);
+  env.players = players;
+  if (name === 'balance') mode = players === 2 ? new BalanceDuoMode(env) : new BalanceMode(env);
+  else mode = players === 2 ? new FruitDuoMode(env) : new FruitMode(env);
+
   ui.hideLoading();
+  if (notice) ui.toast(notice, 4500);
   if (usedNative) native.previewOn($('stage'), stage.fit, stage.mirror);
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   setScope($('screen-play'));
@@ -243,7 +260,9 @@ function onFinish(rec) {
   flushActive();
   var s = store.get();
   var newBest = false, best;
-  if (rec.type === 'fruit') {
+  if (rec.players === 2) {
+    store.recordSession({ type: rec.type, players: 2, age: rec.age, winner: rec.winner, scores: rec.scores || null, totals: rec.totals || null, engine: feed.engineId });
+  } else if (rec.type === 'fruit') {
     newBest = store.recordSession({ type: 'fruit', age: rec.age, score: rec.score, sliced: rec.sliced, maxCombo: rec.maxCombo, stars: rec.stars, engine: feed.engineId }).newBest;
     best = s.best.fruit[rec.age] || 0;
   } else {
@@ -258,7 +277,7 @@ function onFinish(rec) {
   var box = $('result');
   box.innerHTML = mode.resultHTML(rec, newBest, best) +
     '<div class="btn-row"><button class="btn primary focusable" id="btn-again">再来一局</button><button class="btn focusable" id="btn-home">回首页</button></div>' +
-    '<div class="hint">也可以站在原地举起双手 2 秒，直接再来一局</div>';
+    '<div class="hint">' + (rec.players === 2 ? '任何一个人举起双手 2 秒' : '也可以站在原地举起双手 2 秒') + '，直接再来一局</div>';
   $('btn-again').addEventListener('click', replay);
   $('btn-home').addEventListener('click', goHome);
   box.classList.add('show');
@@ -286,5 +305,5 @@ export var playScreen = {
     return false;
   },
   onHide: function () { if (running && !showingResult) pause(); },
-  debug: function () { return { mode: modeName, running: running, paused: paused, showingResult: showingResult, lastRec: lastRec, phase: mode ? mode.phase : null }; }
+  debug: function () { return { mode: modeName, players: mode ? (mode.players || 1) : null, running: running, paused: paused, showingResult: showingResult, lastRec: lastRec, phase: mode ? mode.phase : null }; }
 };
