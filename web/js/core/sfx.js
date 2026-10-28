@@ -22,6 +22,9 @@ export function unlockAudio() {
 
 function ready() { return AC && enabled && AC.state === 'running'; }
 
+// 给舞曲用：音频环境和总音量节点（静音或还没解锁时为 null）
+export function audio() { return ready() ? { ctx: AC, out: master } : null; }
+
 function tone(freq, dur, type, peak, freqEnd, delay) {
   if (!ready()) return;
   var t0 = AC.currentTime + (delay || 0);

@@ -15,11 +15,11 @@
   <section id="screen-home" class="screen" aria-label="首页">
     <header class="home-head">
       <h1 class="wordmark">童动乐园</h1>
-      <p class="home-hint">上下键选游戏，左右键选单人或双人<br>按确定开始</p>
+      <p class="home-hint">左右键选跑道，按确定进去</p>
     </header>
-    <div class="lanes">
-      <button class="lane focusable" data-go="fruit" id="lane-fruit" data-lr>
-        <span class="lane-icon" aria-hidden="true">
+    <div class="lanes5">
+      <button class="lane5 focusable" data-go="hub" data-hub="games" id="lane-games">
+        <span class="lane5-icon" aria-hidden="true">
           <svg viewBox="0 0 120 120">
             <path d="M8 46 A52 52 0 0 0 112 46 Z" fill="#2E7D4F" stroke="#13213C" stroke-width="4" stroke-linejoin="round"/>
             <path d="M17 46 A43 43 0 0 0 103 46 Z" fill="#F7F5EF"/>
@@ -33,17 +33,31 @@
             </g>
           </svg>
         </span>
-        <span class="lane-text">
-          <span class="lane-title">西瓜切切切</span>
-          <span class="lane-desc">挥手切水果，练反应和手眼协调</span>
-        </span>
-        <span class="lane-side">
-          <span class="lane-mode"><span class="opt" data-p="1">单人</span><span class="opt" data-p="2">双人</span></span>
-          <span class="lane-record" id="rec-fruit"><b>0</b>最好成绩</span>
-        </span>
+        <span class="lane5-title">体感游戏</span>
+        <span class="lane5-desc">切水果、摸球、躲障碍，动起来就能玩</span>
+        <span class="lane5-meta" id="meta-games"></span>
+        <span class="lane5-no" aria-hidden="true">1</span>
       </button>
-      <button class="lane focusable" data-go="balance" id="lane-balance" data-nav-down="tool-day0" data-lr>
-        <span class="lane-icon" aria-hidden="true">
+      <button class="lane5 focusable" data-go="hub" data-hub="dance" id="lane-dance">
+        <span class="lane5-icon" aria-hidden="true">
+          <svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="48" cy="20" r="10"/>
+            <path d="M48 32 L50 66"/>
+            <path d="M48 42 L22 26 M48 42 L72 50"/>
+            <path d="M50 66 L34 108 M50 66 L70 104"/>
+            <path d="M88 20 L88 58" />
+            <path d="M88 20 L108 14 L108 50"/>
+            <circle cx="82" cy="60" r="7" fill="currentColor"/>
+            <circle cx="102" cy="52" r="7" fill="currentColor"/>
+          </svg>
+        </span>
+        <span class="lane5-title">跟跳练舞</span>
+        <span class="lane5-desc">跟着小老师跳，边跳边打分</span>
+        <span class="lane5-meta" id="meta-dance"></span>
+        <span class="lane5-no" aria-hidden="true">2</span>
+      </button>
+      <button class="lane5 focusable" data-go="hub" data-hub="train" id="lane-train">
+        <span class="lane5-icon" aria-hidden="true">
           <svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="60" cy="18" r="10"/>
             <path d="M60 30 L60 66"/>
@@ -52,43 +66,88 @@
             <path d="M60 66 L84 70 L80 94"/>
           </svg>
         </span>
-        <span class="lane-text">
-          <span class="lane-title">金鸡独立</span>
-          <span class="lane-desc">单脚站稳，比比哪条腿站得久</span>
-        </span>
-        <span class="lane-side">
-          <span class="lane-mode"><span class="opt" data-p="1">单人</span><span class="opt" data-p="2">双人</span></span>
-          <span class="lane-record" id="rec-balance"><b>0 秒</b>站得最久</span>
-        </span>
+        <span class="lane5-title">AI 动作训练</span>
+        <span class="lane5-desc">深蹲、瑜伽、武术基本功，摄像头帮你看动作</span>
+        <span class="lane5-meta" id="meta-train"></span>
+        <span class="lane5-no" aria-hidden="true">3</span>
       </button>
-      <div class="lane-tools">
-        <button class="tool focusable" data-go="day0" id="tool-day0" data-nav-up="lane-balance">
-          <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="6" y="16" width="52" height="38" rx="8"/>
-            <circle cx="32" cy="35" r="11"/>
-            <path d="M22 16 L26 8 L38 8 L42 16"/>
-          </svg>设备测试<span class="badge" id="badge-day0">先测这个</span>
-        </button>
-        <button class="tool focusable" data-go="records" data-nav-up="lane-balance">
-          <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" aria-hidden="true">
-            <path d="M10 56 L54 56"/>
-            <path d="M18 48 L18 32 M32 48 L32 14 M46 48 L46 24"/>
-          </svg>运动记录
-        </button>
-        <button class="tool focusable" data-go="settings" data-nav-up="lane-balance">
-          <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" aria-hidden="true">
-            <path d="M10 18 L54 18 M10 32 L54 32 M10 46 L54 46"/>
-            <circle cx="40" cy="18" r="6" fill="currentColor"/>
-            <circle cx="22" cy="32" r="6" fill="currentColor"/>
-            <circle cx="36" cy="46" r="6" fill="currentColor"/>
-          </svg>家长设置
-        </button>
-      </div>
+      <button class="lane5 focusable" data-go="hub" data-hub="remote" id="lane-remote">
+        <span class="lane5-icon" aria-hidden="true">
+          <svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="36" y="8" width="48" height="104" rx="16"/>
+            <circle cx="60" cy="42" r="14"/>
+            <circle cx="60" cy="42" r="3" fill="currentColor"/>
+            <path d="M50 74 L50 74 M70 74 L70 74 M50 92 L50 92 M70 92 L70 92"/>
+          </svg>
+        </span>
+        <span class="lane5-title">遥控游戏</span>
+        <span class="lane5-desc">编程、下棋，坐下来用遥控器玩</span>
+        <span class="lane5-meta" id="meta-remote"></span>
+        <span class="lane5-no" aria-hidden="true">4</span>
+      </button>
+      <button class="lane5 focusable" data-go="growth" id="lane-growth">
+        <span class="lane5-icon" aria-hidden="true">
+          <svg viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="60" cy="62" r="30"/>
+            <path d="M14 78 C 8 92, 112 52, 106 46 C 101 40, 90 44, 84 47"/>
+            <path d="M24 70 C 18 62, 30 56, 36 54"/>
+            <path d="M92 12 L95 20 L103 23 L95 26 L92 34 L89 26 L81 23 L89 20 Z" fill="currentColor" stroke-width="3"/>
+          </svg>
+        </span>
+        <span class="lane5-title">成长中心</span>
+        <span class="lane5-desc">每日任务、勋章、成长星球，家长看记录</span>
+        <span class="lane5-meta" id="meta-growth"></span>
+        <span class="lane5-no" aria-hidden="true">5</span>
+      </button>
     </div>
     <footer class="infield">
       <p class="stat">今天运动了<b id="stat-today">0</b>分钟</p>
       <p class="stat">这周有<b id="stat-week">0</b>天在运动</p>
+      <div class="infield-tools">
+        <button class="pill focusable" data-go="day0" id="tool-day0">设备测试<span class="badge" id="badge-day0">先测这个</span></button>
+        <button class="pill focusable" data-go="settings" id="tool-settings">家长设置</button>
+      </div>
     </footer>
+  </section>
+
+  <section id="screen-hub" class="screen page hub" aria-label="入口">
+    <header class="page-head">
+      <div>
+        <h1 class="page-title" id="hub-title">体感游戏</h1>
+        <p class="hub-sub" id="hub-sub"></p>
+      </div>
+      <div class="btn-row">
+        <button class="btn players-btn focusable" id="hub-players"><span class="lane-mode"><span class="opt" data-p="1">单人</span><span class="opt" data-p="2">双人</span></span></button>
+        <button class="btn focusable" data-back>返回首页</button>
+      </div>
+    </header>
+    <div class="tiles" id="hub-tiles"></div>
+    <p class="hub-note" id="hub-note"></p>
+  </section>
+
+  <section id="screen-growth" class="screen page" aria-label="成长中心">
+    <header class="page-head">
+      <h1 class="page-title">成长中心</h1>
+      <div class="btn-row">
+        <button class="btn focusable" data-go="records" id="growth-records">家长查看记录</button>
+        <button class="btn focusable" data-back>返回首页</button>
+      </div>
+    </header>
+    <div class="planet-col">
+      <canvas id="planet" width="640" height="560"></canvas>
+      <div class="planet-name" id="planet-name"></div>
+      <div class="planet-bar"><span id="planet-fill"></span></div>
+      <div class="planet-sub" id="planet-sub"></div>
+    </div>
+    <div class="growth-col">
+      <h3>今日任务</h3>
+      <ul class="tasks" id="tasks"></ul>
+      <h3>勋章 <small id="badge-count"></small></h3>
+      <div class="medals" id="medals"></div>
+      <p class="medal-desc" id="medal-desc">用方向键选一枚勋章，看看怎么得到它</p>
+      <h3>课程进度</h3>
+      <div class="course-chips" id="course-chips"></div>
+    </div>
   </section>
 
   <section id="screen-day0" class="screen page" aria-label="设备测试">
@@ -128,15 +187,20 @@
 
   <section id="screen-records" class="screen page" aria-label="运动记录">
     <header class="page-head">
-      <h1 class="page-title">运动记录</h1>
-      <div class="btn-row"><button class="btn focusable" data-back>返回首页</button></div>
+      <h1 class="page-title">训练记录</h1>
+      <div class="btn-row"><button class="btn focusable" data-go="growth">返回成长中心</button></div>
     </header>
     <div class="rec-wrap">
-      <div class="rec-col">
+      <div class="rec-col rec-days">
         <h3>最近 7 天运动时间</h3>
         <ul class="bars" id="rec-bars"></ul>
+        <p class="rec-total" id="rec-total"></p>
       </div>
-      <div class="rec-col">
+      <div class="rec-col rec-recent">
+        <h3>最近的训练</h3>
+        <ul class="recent" id="rec-recent"></ul>
+      </div>
+      <div class="rec-col rec-best">
         <h3>最好成绩</h3>
         <ul class="bests" id="rec-bests"></ul>
       </div>

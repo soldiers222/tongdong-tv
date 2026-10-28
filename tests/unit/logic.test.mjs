@@ -70,6 +70,7 @@ test('站位闸门：连续合格 0.9 秒才通过', () => {
 test('举起双手 1.5 秒触发一次', () => {
   const h = new HandsUp(1500);
   const up = skeleton({ handsUp: true });
+  h.update(skeleton(), -100); // 先看到手放下
   assert.equal(h.update(up, 0).fire, false);
   assert.equal(h.update(up, 1600).fire, true);
   assert.equal(h.update(up, 1700).fire, false, '只触发一次');

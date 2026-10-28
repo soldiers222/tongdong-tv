@@ -18,8 +18,12 @@ var DEFAULTS = {
   },
   best: {
     fruit: { '6-8': 0, '9-12': 0 },
-    balance: { left: 0, right: 0 }
+    balance: { left: 0, right: 0 },
+    other: {}          // 其他玩法：键如 mole-6-8、dodge-9-12、dance-twinkle
   },
+  totals: { sessions: 0, stars: 0, sec: 0, duo: 0 },
+  progress: {},        // 课程和玩法进度：{键: {n 次数, stars 最好星级, at}}
+  growth: { tasks: {}, badges: {}, perfectDays: 0, perfectDay: null, bestStreak: 0, level: 1 },
   days: {},
   sessions: [],
   day0: null
@@ -71,7 +75,8 @@ export function setSetting(k, v) {
 function today() {
   var s = get();
   var k = dayKey();
-  if (!s.days[k]) s.days[k] = { sec: 0, fruit: 0, balance: 0 };
+  if (!s.days[k]) s.days[k] = { sec: 0, fruit: 0, balance: 0, n: {} };
+  if (!s.days[k].n) s.days[k].n = {};
   return s.days[k];
 }
 
@@ -86,6 +91,7 @@ function pruneDays() {
 export function addActiveSeconds(sec) {
   if (!(sec > 0)) return;
   today().sec += sec;
+  get().totals.sec += sec;
   sessionSec += sec;
   pruneDays();
   save();
@@ -94,18 +100,30 @@ export function addActiveSeconds(sec) {
 export function sessionSeconds() { return sessionSec; }
 export function resetSession() { sessionSec = 0; }
 
-// 记一局；返回是否破纪录
+// 进度记在哪个键上
+function progressKey(rec) {
+  if (rec.type === 'exercise') return 'ex:' + rec.course;
+  if (rec.type === 'dance') return 'dance:' + rec.routine + (rec.players === 2 ? ':2' : '');
+  if (rec.type === 'dancelearn') return 'learn:' + rec.routine;
+  return rec.type + (rec.players === 2 ? ':2' : '');
+}
+
+// 记一局；返回 {newBest 是否破纪录, best 现在的最好成绩（金鸡独立和切水果由调用方自己取）}
 export function recordSession(rec) {
   var s = get();
   rec.at = Date.now();
   s.sessions.push(rec);
-  keepLast(s.sessions, 60);
+  keepLast(s.sessions, 300);
   var d = today();
-  var newBest = false;
+  d.n[rec.type] = (d.n[rec.type] || 0) + 1;
+  s.totals.sessions += 1;
+  s.totals.stars += rec.rating || 0;
+  if (rec.players === 2) s.totals.duo += 1;
+  var newBest = false, best = null;
   if (rec.players === 2) {
     // 双人一局：算运动次数，不算个人最好成绩
     if (rec.type === 'fruit') d.fruit += 1;
-    else d.balance += 1;
+    else if (rec.type === 'balance') d.balance += 1;
   } else if (rec.type === 'fruit') {
     d.fruit += 1;
     var age = rec.age === '9-12' ? '9-12' : '6-8';
@@ -120,9 +138,22 @@ export function recordSession(rec) {
       s.best.balance[leg] = rec.holdMs;
       newBest = true;
     }
+  } else if (rec.bestKey) {
+    var cur = s.best.other[rec.bestKey] || 0;
+    if ((rec.bestValue || 0) > cur) {
+      s.best.other[rec.bestKey] = rec.bestValue;
+      newBest = true;
+    }
+    best = Math.max(cur, rec.bestValue || 0);
   }
+  var pk = progressKey(rec);
+  var pg = s.progress[pk] || { n: 0, stars: 0 };
+  pg.n += 1;
+  pg.stars = Math.max(pg.stars, rec.rating || 0);
+  pg.at = rec.at;
+  s.progress[pk] = pg;
   save();
-  return { newBest: newBest };
+  return { newBest: newBest, best: best };
 }
 
 export function todaySeconds() {
@@ -158,9 +189,18 @@ export function activeDaysThisWeek() {
 export function clearRecords() {
   var s = get();
   s.best = clone(DEFAULTS.best);
+  s.totals = clone(DEFAULTS.totals);
+  s.progress = {};
+  s.growth = clone(DEFAULTS.growth);
   s.days = {};
   s.sessions = [];
   save();
+}
+
+// 最近 n 局（新的在前）
+export function recentSessions(n) {
+  var list = get().sessions;
+  return list.slice(Math.max(0, list.length - (n || 20))).reverse();
 }
 
 export function setDay0(result) {

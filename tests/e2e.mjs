@@ -126,6 +126,7 @@ function nativeStub() {
       setTimeout(function () { if (window.__tdNativeBench) window.__tdNativeBench(benchResult(c)); }, c.ms || 300);
     },
     cameraSizes: function () { return '[]'; },
+    openBrowser: function (url, title) { (log.browser = log.browser || []).push({ url: url, title: title }); },
     saveText: function (name, text) {
       log.saved = { name: name, text: text };
       return '/sdcard/Android/data/com.family.tongdong/files/' + name;
@@ -160,7 +161,7 @@ async function waitFor(page, fn, timeout, arg) {
 const shot = (page, name) => page.screenshot({ path: join(OUT, name + '.png') });
 
 try {
-  // 1. 首页与遥控器导航
+  // 1. 首页五条跑道、入口页与遥控器导航
   {
     const page = await open('/');
     check('首页显示', await waitFor(page, () => document.querySelector('#screen-home.active'), 8000));
@@ -168,23 +169,20 @@ try {
     await sleep(300);
     await shot(page, '01-home');
     const id = () => page.evaluate(() => document.activeElement && document.activeElement.id);
-    check('默认焦点在西瓜切切切', (await id()) === 'lane-fruit');
-    const modeOn = () => page.evaluate(() => Array.from(document.querySelectorAll('#screen-home .lane-mode .opt.on')).map((e) => e.textContent).join(','));
-    check('首页默认单人', (await modeOn()) === '单人,单人' && (await page.evaluate(() => window.TD.store.settings().players)) === 1);
+    const tile = () => page.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-tile'));
+    check('首页五个入口', (await page.evaluate(() => document.querySelectorAll('#screen-home .lane5').length)) === 5);
+    check('默认焦点在体感游戏', (await id()) === 'lane-games');
     await page.keyboard.press('ArrowRight');
-    check('跑道上按右键换成双人（两个游戏一起换）', (await modeOn()) === '双人,双人' && (await page.evaluate(() => window.TD.store.settings().players)) === 2 && (await id()) === 'lane-fruit');
-    await sleep(300);
-    await shot(page, '01b-home-duo');
-    await page.keyboard.press('ArrowLeft');
-    check('再按左键换回单人', (await modeOn()) === '单人,单人' && (await page.evaluate(() => window.TD.store.settings().players)) === 1);
+    check('右键到跟跳练舞', (await id()) === 'lane-dance');
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
+    check('再右键三次到成长中心', (await id()) === 'lane-growth');
     await page.keyboard.press('ArrowDown');
-    check('下键到金鸡独立', (await id()) === 'lane-balance');
-    await page.keyboard.press('ArrowDown');
-    check('再下键到设备测试', (await id()) === 'tool-day0');
-    await page.keyboard.press('ArrowRight');
-    await page.keyboard.press('ArrowRight');
+    check('下键到草坪上的工具', /^tool-/.test(await id()), await id());
+    await page.keyboard.press('ArrowUp');
+    check('上键回到跑道', /^lane-/.test(await id()), await id());
+    await page.evaluate(() => document.getElementById('tool-settings').focus());
     await page.keyboard.press('Enter');
-    check('右键两次进入家长设置', await waitFor(page, () => document.querySelector('#screen-settings.active'), 3000));
+    check('进入家长设置', await waitFor(page, () => document.querySelector('#screen-settings.active'), 3000));
     const before = await page.evaluate(() => document.activeElement.querySelector('.val').textContent);
     await page.keyboard.press('ArrowRight');
     const after = await page.evaluate(() => document.activeElement.querySelector('.val').textContent);
@@ -193,6 +191,34 @@ try {
     await shot(page, '06-settings');
     await page.keyboard.press('Escape');
     check('返回键回首页', await waitFor(page, () => document.querySelector('#screen-home.active'), 3000));
+    // 体感游戏入口
+    await page.evaluate(() => document.getElementById('lane-games').focus());
+    await page.keyboard.press('Enter');
+    check('进入体感游戏', await waitFor(page, () => document.querySelector('#screen-hub.active') && document.getElementById('screen-hub').getAttribute('data-hub') === 'games', 3000));
+    check('体感游戏五格，焦点在西瓜切切切', (await page.evaluate(() => document.querySelectorAll('#hub-tiles .tile').length)) === 5 && (await tile()) === 'fruit');
+    await page.keyboard.press('ArrowRight');
+    check('左右键在格子之间移动', (await tile()) === 'space', await tile());
+    await page.evaluate(() => document.getElementById('hub-players').focus());
+    await page.keyboard.press('Enter');
+    check('右上角按确定换成双人', (await page.evaluate(() => window.TD.store.settings().players)) === 2 && (await page.evaluate(() => document.querySelectorAll('#hub-tiles .duo-tag.on').length)) === 4);
+    await sleep(300);
+    await shot(page, '01b-hub-games-duo');
+    await page.keyboard.press('Enter');
+    check('再按确定换回单人', (await page.evaluate(() => window.TD.store.settings().players)) === 1);
+    await page.keyboard.press('Escape');
+    check('返回键回首页，焦点回到体感游戏', await waitFor(page, () => document.querySelector('#screen-home.active') && document.activeElement.id === 'lane-games', 3000));
+    for (const [lane, hub, n] of [['lane-dance', 'dance', 7], ['lane-train', 'train', 7], ['lane-remote', 'remote', 8]]) {
+      await page.evaluate((l) => document.getElementById(l).focus(), lane);
+      await page.keyboard.press('Enter');
+      const ok = await waitFor(page, (h) => document.querySelector('#screen-hub.active') && document.getElementById('screen-hub').getAttribute('data-hub') === h, 3000, hub);
+      const count = await page.evaluate(() => document.querySelectorAll('#hub-tiles .tile').length);
+      check('入口页：' + hub + ' 有 ' + n + ' 格', ok && count === n, String(count));
+      await sleep(300);
+      await shot(page, '01c-hub-' + hub);
+      await page.keyboard.press('Escape');
+      await waitFor(page, () => document.querySelector('#screen-home.active'), 3000);
+    }
+    await page.evaluate(() => document.getElementById('lane-games').focus());
     check('首页返回返回 false（外壳据此退出）', (await page.evaluate(() => window.__tdBack())) === false);
     await page.close();
   }
@@ -449,11 +475,139 @@ try {
     await page.close();
   }
 
-  // 5. 运动记录
+  // 6. AI 动作训练：协调训练（每个动作 3 次）
   {
-    const page = await open('/?screen=records');
-    check('运动记录页显示', await waitFor(page, () => document.querySelectorAll('#rec-bars li').length === 7, 5000));
-    await shot(page, '09-records');
+    const page = await open('/?mock=train&screen=play&mode=exercise&course=coord&reps=3&from=train');
+    check('训练：先看示范', await waitFor(page, () => window.TD.play.debug().phase === 'intro', 12000));
+    await sleep(2500);
+    await shot(page, '11-train-intro');
+    await waitFor(page, () => window.TD.play.debug().phase === 'go', 8000);
+    await sleep(1500);
+    await shot(page, '12-train-go');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 60000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('训练：协调训练三个动作都完成', done && rec && rec.type === 'exercise' && rec.steps.length === 3 && rec.steps.every((x) => x.reps === 3),
+      rec ? rec.steps.map((x) => x.id + ' ' + x.reps + '/' + x.target).join('，') : '');
+    check('训练：做对了三颗星', rec && rec.stars === 3);
+    await sleep(400);
+    await shot(page, '13-train-result');
+    check('训练：结算页有完成任务或勋章的消息', await page.evaluate(() => document.querySelectorAll('#result .news-item').length > 0));
+    check('训练：从入口进来的，结算页是「回上一页」', await page.evaluate(() => document.getElementById('btn-home').textContent === '回上一页'));
+    await page.keyboard.press('Escape');
+    check('训练：返回键回到 AI 动作训练入口', await waitFor(page, () => document.querySelector('#screen-hub.active') && document.getElementById('screen-hub').getAttribute('data-hub') === 'train', 4000));
+    await page.close();
+  }
+
+  // 6b. 做不来可以跳过：暂停菜单里「跳过这个动作」
+  {
+    const page = await open('/?mock=still&screen=play&mode=exercise&course=balanceT&hold=3');
+    for (let i = 0; i < 2; i++) {
+      await waitFor(page, () => window.TD.play.debug().phase === 'go', 20000);
+      await page.keyboard.press('Escape');
+      await waitFor(page, () => document.getElementById('loading').classList.contains('show'), 3000);
+      const hasSkip = await page.evaluate(() => Array.from(document.querySelectorAll('#loading-btns .btn')).some((b) => b.textContent === '跳过这个动作'));
+      if (i === 0) check('训练：暂停菜单里有「跳过这个动作」', hasSkip);
+      await page.evaluate(() => Array.from(document.querySelectorAll('#loading-btns .btn')).find((b) => b.textContent === '跳过这个动作').click());
+      await waitFor(page, () => window.TD.play.debug().phase === 'stepdone' || window.TD.play.debug().phase === 'result', 3000);
+    }
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 10000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('训练：两边都跳过，记为跳过、零星', done && rec && rec.steps.length === 2 && rec.steps.every((x) => x.skipped) && rec.stars === 0);
+    await page.close();
+  }
+
+  // 7. 敏捷摸球
+  {
+    const page = await open('/?mock=mole&screen=play&mode=mole&dur=15&players=1');
+    await waitFor(page, () => window.TD.play.debug().phase === 'play', 15000);
+    await sleep(4000);
+    await shot(page, '14-mole-play');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 40000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('敏捷摸球：一局结束，摸中了球', done && rec && rec.type === 'mole' && rec.hits >= 5, rec ? `得分 ${rec.score}，摸中 ${rec.hits}，漏掉 ${rec.misses}` : '');
+    await page.close();
+  }
+
+  // 8. 左右闪避、太空躲障碍
+  for (const [variant, type, age] of [['side', 'dodge', '6-8'], ['space', 'space', '9-12']]) {
+    const page = await open(`/?mock=dodge&screen=play&mode=dodge&variant=${variant}&dur=22&age=${age}&players=1`);
+    check(type + '：先学怎么躲', await waitFor(page, () => window.TD.play.debug().phase === 'learn', 20000));
+    await waitFor(page, () => window.TD.play.debug().phase === 'play', 40000);
+    await sleep(8000);
+    await shot(page, '15-' + type + '-play');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 40000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check(type + '：坚持到最后，躲开了障碍', done && rec && rec.type === type && rec.survived && rec.dodged >= 5, rec ? `躲开 ${rec.dodged}，被撞 ${rec.hits}，得分 ${rec.score}` : '');
+    await page.close();
+  }
+
+  // 9. 跟跳练舞（截短到 8 个舞步）和舞蹈教学
+  {
+    const page = await open('/?mock=dance&screen=play&mode=dance&routine=beat&short=8&players=1');
+    check('跟跳：音乐开始，前奏数拍子', await waitFor(page, () => window.TD.play.debug().phase === 'dance', 15000));
+    await sleep(12000);
+    await shot(page, '16-dance');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 40000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('跟跳：跳完出结算，跟着小老师跳得了高分', done && rec && rec.type === 'dance' && rec.frac > 0.8, rec ? JSON.stringify(rec.counts) : '');
+    await page.close();
+  }
+  {
+    const page = await open('/?mock=dance&screen=play&mode=dance&routine=kungfu&learn=1&short=3&from=dance');
+    check('教学：先看慢动作示范', await waitFor(page, () => window.TD.play.debug().phase === 'show', 15000));
+    await sleep(2000);
+    await shot(page, '17-dance-learn');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 60000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('教学：每个舞步都摆像了', done && rec && rec.type === 'dancelearn' && rec.ok === rec.total && rec.total >= 2, rec ? rec.ok + '/' + rec.total : '');
+    check('教学：结算页第一个按钮是「跟着音乐跳」', await page.evaluate(() => document.activeElement && document.activeElement.id === 'btn-extra' && document.activeElement.textContent === '跟着音乐跳'));
+    await page.keyboard.press('Enter');
+    check('教学：按确定直接去跟着音乐跳', await waitFor(page, () => { const d = window.TD.play.debug(); return d.params && d.params.mode === 'dance' && !d.params.learn && d.phase === 'dance'; }, 15000));
+    await page.close();
+  }
+  {
+    const page = await open('/?mock=dance&screen=play&mode=dance&routine=twinkle&short=4&players=2');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 50000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('双人跟跳：两个人各自打分', done && rec && rec.players === 2 && rec.scores.length === 2 && rec.scores[0] > 0 && rec.scores[1] > 0, rec ? rec.scores.join(' : ') : '');
+    await page.evaluate(() => window.TD.store.setSetting('players', 1));
+    await page.close();
+  }
+
+  // 10. 遥控游戏：电视版用带光标的浏览器打开网站
+  {
+    const page = await open('/?screen=hub&hub=remote', { nativeStub: true });
+    await waitFor(page, () => document.querySelector('#screen-hub.active'), 5000);
+    await page.keyboard.press('Enter');
+    const log = await page.evaluate(() => window.__nativeLog.browser || []);
+    check('遥控游戏：确定键用安卓浏览器打开 Scratch', log.length === 1 && log[0].url === 'https://scratch.mit.edu/' && log[0].title === 'Scratch', JSON.stringify(log));
+    check('遥控游戏：应用自己的页面没有跳走', await page.evaluate(() => !!document.querySelector('#screen-hub.active')));
+    await page.close();
+  }
+
+  // 11. 成长中心
+  {
+    const page = await open('/?screen=growth');
+    check('成长中心：三个今日任务', await waitFor(page, () => document.querySelectorAll('#tasks li').length === 3, 5000));
+    const info = await page.evaluate(() => ({
+      medals: document.querySelectorAll('#medals .medal').length,
+      got: document.querySelectorAll('#medals .medal.on').length,
+      chips: document.querySelectorAll('#course-chips .chip').length,
+      planet: document.getElementById('planet-name').textContent,
+      stars: window.TD.store.get().totals.stars
+    }));
+    check('成长中心：勋章和课程进度', info.medals === 17 && info.got >= 2 && info.chips === 9, JSON.stringify(info));
+    check('成长中心：玩过之后星球有了星星', info.stars > 0 && /第 \d+ 级/.test(info.planet), JSON.stringify(info));
+    await page.evaluate(() => document.querySelector('#medals .medal').focus());
+    check('成长中心：选中勋章显示怎么得到', /：/.test(await page.evaluate(() => document.getElementById('medal-desc').textContent)));
+    await sleep(800);
+    await shot(page, '18-growth');
+    await page.click('#growth-records');
+    check('训练记录：从成长中心进入', await waitFor(page, () => document.querySelector('#screen-records.active'), 3000));
+    check('训练记录：最近的训练有记录', (await page.evaluate(() => document.querySelectorAll('#rec-recent li:not(.empty-note)').length)) >= 5);
+    await shot(page, '19-records');
+    await page.keyboard.press('Escape');
+    check('训练记录：返回键回成长中心', await waitFor(page, () => document.querySelector('#screen-growth.active'), 3000));
     await page.close();
   }
 

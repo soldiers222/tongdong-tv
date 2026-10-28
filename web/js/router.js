@@ -47,6 +47,12 @@ export function go(name, params) {
 export function back() {
   if (ui.backOverlay()) return true;
   if (current && current.onBack && current.onBack() === true) return true;
+  // 二级页面回到它的入口页（比如从体感游戏里进的切水果，回到体感游戏）
+  var to = current && current.backTo ? current.backTo() : null;
+  if (to) {
+    go(to[0], to[1]);
+    return true;
+  }
   if (currentName !== 'home') {
     go('home');
     return true;

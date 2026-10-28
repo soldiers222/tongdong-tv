@@ -3,6 +3,7 @@ package com.family.tongdong;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
@@ -610,6 +611,22 @@ public class MainActivity extends Activity {
             PoseEngine p = pose();
             if (p.getAnalysisSize() == null) p.prepare();
             return p.infoJson();
+        }
+
+        /** 遥控游戏：用带光标的浏览器打开网站（只开 http / https） */
+        @JavascriptInterface
+        public void openBrowser(String url, String title) {
+            if (url == null || !(url.startsWith("https://") || url.startsWith("http://"))) return;
+            runOnUiThread(() -> {
+                try {
+                    Intent i = new Intent(MainActivity.this, BrowserActivity.class);
+                    i.putExtra(BrowserActivity.EXTRA_URL, url);
+                    i.putExtra(BrowserActivity.EXTRA_TITLE, title == null ? "" : title);
+                    startActivity(i);
+                } catch (Exception e) {
+                    Toast.makeText(MainActivity.this, "打不开网页：" + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            });
         }
 
         @JavascriptInterface

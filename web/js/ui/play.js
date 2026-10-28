@@ -11,6 +11,11 @@ import { FruitMode } from '../games/fruit.js';
 import { FruitDuoMode } from '../games/fruit-duo.js';
 import { BalanceMode } from '../training/balance.js';
 import { BalanceDuoMode } from '../training/balance-duo.js';
+import { ExerciseMode } from '../training/exercise.js';
+import { MoleMode } from '../games/mole.js';
+import { DodgeMode } from '../games/dodge.js';
+import { DanceMode } from '../dance/dance.js';
+import { ratingOf, afterSession } from '../core/growth.js';
 import { now, keepLast } from '../core/util.js';
 import { cancel as cancelVoice } from '../core/voice.js';
 import { go } from '../router.js';
@@ -30,6 +35,22 @@ var activeMs = 0;
 var token = 0;
 var showingResult = false;
 var lastRec = null;
+var params = {};
+
+// 各种玩法：画面怎么铺（cover 铺满裁边 / contain 全看到）、能不能双人、怎么创建
+var MODES = {
+  fruit: { fit: 'cover', duo: true, make: function (env, p, n) { return n === 2 ? new FruitDuoMode(env) : new FruitMode(env); } },
+  balance: { fit: 'contain', duo: true, make: function (env, p, n) { return n === 2 ? new BalanceDuoMode(env) : new BalanceMode(env); } },
+  exercise: { fit: 'contain', duo: false, make: function (env, p) { return new ExerciseMode(env, p.course); } },
+  mole: { fit: 'cover', duo: true, make: function (env, p, n) { return new MoleMode(env, n); } },
+  dodge: { fit: 'cover', duo: true, make: function (env, p, n) { return new DodgeMode(env, p.variant, n); } },
+  dance: { fit: 'contain', duo: true, make: function (env, p, n) { return new DanceMode(env, p.routine, p.learn, n); } }
+};
+
+export function supportsDuo(p) {
+  var m = MODES[p && p.mode];
+  return !!(m && m.duo && !(p.mode === 'dance' && p.learn));
+}
 
 // 识别引擎的尝试顺序：家长指定 → 设备测试最优 → 默认顺序；跳过本机不支持的
 export function engineOrder() {
@@ -120,12 +141,16 @@ function stopAll() {
   setInterceptor(null);
 }
 
-async function start(name) {
+async function start(p) {
   stopAll();
   var my = token;
+  params = p || {};
+  var name = MODES[params.mode] ? params.mode : 'fruit';
+  params.mode = name;
   modeName = name;
+  var def = MODES[name];
   var s = store.settings();
-  var players = s.players === 2 ? 2 : 1;
+  var players = s.players === 2 && supportsDuo(params) ? 2 : 1;
   var notice = '';
   if (!stage) stage = new Stage($('stage'), { alpha: native.available() });
   stage.mirror = !!s.mirror;
@@ -135,7 +160,7 @@ async function start(name) {
   env.settings = s;
   env.mock = !!feed.mock;
   mode = null;
-  stage.setFit(name === 'balance' ? 'contain' : 'cover');
+  stage.setFit(def.fit);
   // 先画一帧背景，避免黑屏
   stage.drawVideo(null, 0);
   setEnginePlayers(players);
@@ -144,7 +169,7 @@ async function start(name) {
   var loaded = false, lastErr = null, usedNative = false;
   // 原生识别优先：先把网页摄像头让出来，再启动安卓里的摄像头和识别
   if (!feed.mock && order[0] === 'native') {
-    ui.loading('准备中', '正在启动识别…', [{ label: '回首页', fn: goHome }], goHome);
+    ui.loading('准备中', '正在启动识别…', [{ label: backLabel(), fn: goBack }], goBack);
     closeCamera($('cam'));
     try {
       await feed.useEngine('native', function (txt) { if (my === token) ui.loadingSub(txt + '…'); });
@@ -162,7 +187,7 @@ async function start(name) {
     stage.setVideoSize(feed.engine.frameW, feed.engine.frameH);
     stage.transparentVideo = true;
   } else if (!feed.mock) {
-    ui.loading('准备中', '正在打开摄像头…', [{ label: '回首页', fn: goHome }], goHome);
+    ui.loading('准备中', '正在打开摄像头…', [{ label: backLabel(), fn: goBack }], goBack);
     try {
       var info = await openCamera($('cam'));
       if (my !== token) return;
@@ -170,9 +195,9 @@ async function start(name) {
     } catch (e) {
       if (my !== token) return;
       ui.loading('摄像头打不开', cameraErrorText(e), [
-        { label: '重试', primary: true, fn: function () { start(name); } },
-        { label: '回首页', fn: goHome }
-      ], goHome);
+        { label: '重试', primary: true, fn: function () { start(params); } },
+        { label: backLabel(), fn: goBack }
+      ], goBack);
       return;
     }
   } else {
@@ -181,7 +206,7 @@ async function start(name) {
 
   for (var i = 0; i < order.length && !loaded; i++) {
     var label = (engineInfo(order[i]) || {}).label || order[i];
-    ui.loading('准备中', '正在加载识别模型：' + label + '（第一次大约 10 到 30 秒）', [{ label: '回首页', fn: goHome }], goHome);
+    ui.loading('准备中', '正在加载识别模型：' + label + '（第一次大约 10 到 30 秒）', [{ label: backLabel(), fn: goBack }], goBack);
     try {
       await feed.useEngine(order[i], function (txt) { if (my === token) ui.loadingSub(txt + '…'); });
       loaded = true;
@@ -196,10 +221,10 @@ async function start(name) {
   }
   if (!loaded) {
     ui.loading('识别模型加载失败', '这台设备没能跑起识别模型（' + (lastErr && lastErr.message ? lastErr.message : '未知原因') + '）。可以先做一次设备测试看看原因。', [
-      { label: '重试', primary: true, fn: function () { start(name); } },
+      { label: '重试', primary: true, fn: function () { start(params); } },
       { label: '设备测试', fn: function () { go('day0'); } },
-      { label: '回首页', fn: goHome }
-    ], goHome);
+      { label: backLabel(), fn: goBack }
+    ], goBack);
     return;
   }
 
@@ -211,8 +236,7 @@ async function start(name) {
   }
   if (feed.engine && feed.engine.setPlayers) feed.engine.setPlayers(players);
   env.players = players;
-  if (name === 'balance') mode = players === 2 ? new BalanceDuoMode(env) : new BalanceMode(env);
-  else mode = players === 2 ? new FruitDuoMode(env) : new FruitMode(env);
+  mode = def.make(env, params, players);
 
   ui.hideLoading();
   if (notice) ui.toast(notice, 4500);
@@ -231,11 +255,27 @@ function pause() {
   if (!running || paused || showingResult) return;
   paused = true;
   if (mode.pause) mode.pause(true);
-  ui.loading('暂停了', mode.title, [
-    { label: '继续', primary: true, fn: resume },
-    { label: '重新开始', fn: function () { ui.hideLoading(); paused = false; if (mode.pause) mode.pause(false); mode.restart(); } },
-    { label: '回首页', fn: goHome }
-  ], resume);
+  var btns = [{ label: '继续', primary: true, fn: resume }];
+  // 训练和舞蹈教学：可以跳过做不来的动作
+  if (mode.skip && mode.canSkip && mode.canSkip()) {
+    btns.push({ label: '跳过这个动作', fn: function () { resume(); mode.skip(); } });
+  }
+  btns.push({ label: '重新开始', fn: function () { ui.hideLoading(); paused = false; if (mode.pause) mode.pause(false); mode.restart(); } });
+  btns.push({ label: backLabel(), fn: goBack });
+  ui.loading('暂停了', mode.title, btns, resume);
+}
+
+// 从哪个入口进来的，就回哪个入口
+function backLabel() { return params.from === 'growth' ? '回成长中心' : (params.from ? '回上一页' : '回首页'); }
+function backTarget() {
+  if (params.from === 'growth') return ['growth', {}];
+  if (params.from) return ['hub', { id: params.from }];
+  return null;
+}
+function goBack() {
+  var b = backTarget();
+  if (b) go(b[0], b[1]);
+  else goHome();
 }
 
 function resume() {
@@ -256,39 +296,72 @@ function replay() {
   mode.restart();
 }
 
+// 存进记录的精简版本（不存大数组）
+function slim(rec) {
+  var out = {};
+  for (var k in rec) {
+    if (k === 'log' || k === 'series' || k === 'results' || k === 'legs') continue;
+    out[k] = rec[k];
+  }
+  if (rec.steps) {
+    out.steps = rec.steps.map(function (r) {
+      return { id: r.id, side: r.side || null, kind: r.kind, reps: r.reps, good: r.good, target: r.target, holdMs: r.holdMs, stars: r.stars, skipped: !!r.skipped };
+    });
+  }
+  return out;
+}
+
 function onFinish(rec) {
   flushActive();
   var s = store.get();
   var newBest = false, best;
+  rec.rating = ratingOf(rec);
   if (rec.players === 2) {
-    store.recordSession({ type: rec.type, players: 2, age: rec.age, winner: rec.winner, scores: rec.scores || null, totals: rec.totals || null, engine: feed.engineId });
+    store.recordSession({ type: rec.type, players: 2, age: rec.age, winner: rec.winner, scores: rec.scores || null, totals: rec.totals || null, routine: rec.routine || null, rating: rec.rating, engine: feed.engineId });
   } else if (rec.type === 'fruit') {
-    newBest = store.recordSession({ type: 'fruit', age: rec.age, score: rec.score, sliced: rec.sliced, maxCombo: rec.maxCombo, stars: rec.stars, engine: feed.engineId }).newBest;
+    newBest = store.recordSession({ type: 'fruit', age: rec.age, score: rec.score, sliced: rec.sliced, maxCombo: rec.maxCombo, stars: rec.stars, accuracy: rec.accuracy, rating: rec.rating, engine: feed.engineId }).newBest;
     best = s.best.fruit[rec.age] || 0;
-  } else {
+  } else if (rec.type === 'balance') {
     for (var i = 0; i < rec.legs.length; i++) {
       var l = rec.legs[i];
-      var r = store.recordSession({ type: 'balance', age: rec.age, stand: l.stand, holdMs: l.holdMs, stars: l.stars, reason: l.reason, engine: feed.engineId });
+      var r = store.recordSession({ type: 'balance', age: rec.age, stand: l.stand, holdMs: l.holdMs, stars: l.stars, rating: l.stars, reason: l.reason, engine: feed.engineId });
       if (r.newBest) { l.newBest = true; newBest = true; }
     }
     best = s.best.balance;
+  } else {
+    var rr = store.recordSession(slim(rec));
+    newBest = rr.newBest;
+    best = rr.best;
   }
+  var news = afterSession(store);
   lastRec = rec;
   var box = $('result');
+  var extra = mode.extraButton ? mode.extraButton() : null;
   box.innerHTML = mode.resultHTML(rec, newBest, best) +
-    '<div class="btn-row"><button class="btn primary focusable" id="btn-again">再来一局</button><button class="btn focusable" id="btn-home">回首页</button></div>' +
-    '<div class="hint">' + (rec.players === 2 ? '任何一个人举起双手 2 秒' : '也可以站在原地举起双手 2 秒') + '，直接再来一局</div>';
+    (news.length ? '<div class="news">' + news.map(function (n) { return '<span class="news-item">' + n + '</span>'; }).join('') + '</div>' : '') +
+    '<div class="btn-row">' + (extra ? '<button class="btn primary focusable" id="btn-extra">' + extra.label + '</button>' : '') +
+    '<button class="btn' + (extra ? '' : ' primary') + ' focusable" id="btn-again">' + (extra ? '再学一遍' : '再来一局') + '</button>' +
+    '<button class="btn focusable" id="btn-home">' + backLabel() + '</button></div>' +
+    '<div class="hint">' + (rec.players === 2 ? '任何一个人举起双手 2 秒' : '也可以站在原地举起双手 2 秒') + '，直接' + (extra ? '再学一遍' : '再来一局') + '</div>';
+  if (extra) {
+    $('btn-extra').addEventListener('click', function () {
+      var p2 = {};
+      for (var k in extra.mode) p2[k] = extra.mode[k];
+      p2.from = params.from;
+      go('play', p2);
+    });
+  }
   $('btn-again').addEventListener('click', replay);
-  $('btn-home').addEventListener('click', goHome);
+  $('btn-home').addEventListener('click', goBack);
   box.classList.add('show');
   showingResult = true;
   if (mode.afterResult) mode.afterResult(box, rec);
-  setScope(box, $('btn-again'));
+  setScope(box, extra ? $('btn-extra') : $('btn-again'));
   var lim = store.settings().limitMin;
   if (lim > 0 && store.sessionSeconds() >= lim * 60) {
     showRest(lim, 60, function (choice) {
       store.resetSession();
-      if (choice === 'home') goHome();
+      if (choice === 'home') goBack();
       else setScope(box, $('btn-again'));
     });
   }
@@ -296,7 +369,7 @@ function onFinish(rec) {
 
 export var playScreen = {
   manageFocus: true,
-  enter: function (params) { start(params.mode || 'fruit'); },
+  enter: function (p) { start(p || {}); },
   exit: function () { stopAll(); },
   onBack: function () {
     if (showingResult) return false;
@@ -305,5 +378,7 @@ export var playScreen = {
     return false;
   },
   onHide: function () { if (running && !showingResult) pause(); },
-  debug: function () { return { mode: modeName, players: mode ? (mode.players || 1) : null, running: running, paused: paused, showingResult: showingResult, lastRec: lastRec, phase: mode ? mode.phase : null }; }
+  backTo: function () { return backTarget(); },
+  debug: function () { return { mode: modeName, params: params, players: mode ? (mode.players || 1) : null, running: running, paused: paused, showingResult: showingResult, lastRec: lastRec, phase: mode ? mode.phase : null }; },
+  mode: function () { return mode; }
 };

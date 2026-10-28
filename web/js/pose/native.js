@@ -196,3 +196,18 @@ export function cpuText(cpus) {
 window.addEventListener('resize', function () {
   if (shown) setTimeout(function () { if (shown) send(shown.el, shown.fit, shown.mirror); }, 50);
 });
+
+// 在电视版 APK 里（有安卓接口）
+export function inApp() { return !!window.TongdongNative; }
+
+// 用 APK 里带光标的浏览器打开网站（遥控器方向键移动光标）；不支持时返回 false
+export function openBrowser(url, title) {
+  var n = window.TongdongNative;
+  if (!n || typeof n.openBrowser !== 'function') return false;
+  try {
+    n.openBrowser(url, title || '');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}

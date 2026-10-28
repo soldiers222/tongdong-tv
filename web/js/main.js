@@ -11,6 +11,8 @@ import { day0Screen } from './diag/day0.js';
 import { playScreen } from './ui/play.js';
 import { recordsScreen } from './ui/records.js';
 import { settingsScreen } from './ui/settings.js';
+import { hubScreen } from './ui/hub.js';
+import { growthScreen } from './ui/growth.js';
 import { VERSION } from './version.js';
 
 var app = document.getElementById('app');
@@ -58,6 +60,14 @@ function waitFont() {
   return Promise.race([p, t]);
 }
 
+// 直接打开某个玩法（测试用）：?screen=play&mode=dodge&variant=space、&course=yoga、&routine=beat&learn=1
+function startParams() {
+  var p = { mode: qs('mode') || 'fruit' };
+  ['course', 'variant', 'routine', 'from'].forEach(function (k) { if (qs(k)) p[k] = qs(k); });
+  if (qs('learn') === '1') p.learn = true;
+  return p;
+}
+
 function boot() {
   store.load();
   var s = store.settings();
@@ -89,13 +99,16 @@ function boot() {
   register('play', playScreen);
   register('records', recordsScreen);
   register('settings', settingsScreen);
+  register('hub', hubScreen);
+  register('growth', growthScreen);
 
   document.addEventListener('click', function (e) {
     var t = e.target && e.target.closest ? e.target.closest('[data-go],[data-back]') : null;
     if (!t) return;
-    if (t.hasAttribute('data-back')) { go('home'); return; }
+    if (t.hasAttribute('data-back')) { back(); return; }
     var dest = t.getAttribute('data-go');
     if (dest === 'fruit' || dest === 'balance') go('play', { mode: dest });
+    else if (dest === 'hub') go('hub', { id: t.getAttribute('data-hub') });
     else go(dest);
   });
 
@@ -115,7 +128,9 @@ function boot() {
   waitFont().then(function () {
     var start = qs('screen');
     if (start === 'fruit' || start === 'balance') go('play', { mode: start });
-    else go(start && start !== 'play' ? start : 'home');
+    else if (start === 'play') go('play', startParams());
+    else if (start === 'hub') go('hub', { id: qs('hub') || 'games' });
+    else go(start || 'home');
   });
 }
 
