@@ -95,8 +95,15 @@ export function move(dir) {
   }
 }
 
+// 正在输入框里打字（添加视频的 BV 号）
+function typing(el) {
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && !el.readOnly && !el.disabled;
+}
+
 function onKey(e) {
   var name = keyName(e);
+  // 输入框里：退格键删字、左右键移光标、确定键交给输入法（电视的遥控器输入、adb input text），不当成遥控器导航
+  if (typing(document.activeElement) && (e.keyCode === 8 || e.key === 'Backspace' || name === 'left' || name === 'right' || name === 'enter')) return;
   if (onAnyKeyCb) onAnyKeyCb(name, e);
   if (!name) return;
   if (interceptor && interceptor(name, e) === true) {

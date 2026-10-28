@@ -13,6 +13,7 @@ import { recordsScreen } from './ui/records.js';
 import { settingsScreen } from './ui/settings.js';
 import { hubScreen } from './ui/hub.js';
 import { growthScreen } from './ui/growth.js';
+import { videosScreen } from './video/library.js';
 import { VERSION } from './version.js';
 
 var app = document.getElementById('app');
@@ -63,7 +64,7 @@ function waitFont() {
 // 直接打开某个玩法（测试用）：?screen=play&mode=dodge&variant=space、&course=yoga、&routine=beat&learn=1
 function startParams() {
   var p = { mode: qs('mode') || 'fruit' };
-  ['course', 'variant', 'routine', 'from'].forEach(function (k) { if (qs(k)) p[k] = qs(k); });
+  ['course', 'variant', 'routine', 'from', 'bv', 'p', 'title', 'demo', 'dur', 'cat', 'local'].forEach(function (k) { if (qs(k)) p[k] = qs(k); });
   if (qs('learn') === '1') p.learn = true;
   return p;
 }
@@ -101,6 +102,7 @@ function boot() {
   register('settings', settingsScreen);
   register('hub', hubScreen);
   register('growth', growthScreen);
+  register('videos', videosScreen);
 
   document.addEventListener('click', function (e) {
     var t = e.target && e.target.closest ? e.target.closest('[data-go],[data-back]') : null;
@@ -130,6 +132,7 @@ function boot() {
     if (start === 'fruit' || start === 'balance') go('play', { mode: start });
     else if (start === 'play') go('play', startParams());
     else if (start === 'hub') go('hub', { id: qs('hub') || 'games' });
+    else if (start === 'videos') go('videos', { cat: qs('cat') || null });
     else go(start || 'home');
   });
 }

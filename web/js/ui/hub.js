@@ -10,6 +10,16 @@ import { figure, drawFigure } from '../core/figure.js';
 import { MOVES } from '../dance/routines.js';
 import { EXERCISES } from '../training/exercises.js';
 import * as native from '../pose/native.js';
+import { VIDEOS } from '../video/videos.js';
+
+var VIDEO_TOTAL = VIDEOS.length;
+
+// 跟着跳过几个不同的视频
+function videoCount() {
+  var n = 0, pr = store.get().progress;
+  for (var k in pr) if (k.indexOf('video:') === 0) n++;
+  return n;
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -65,9 +75,11 @@ export var HUBS = {
   },
   dance: {
     title: '跟跳练舞',
-    sub: '先学舞步，再跟着音乐跳；骨架线变绿就是跳对了',
-    note: '跟跳可以两个人一起跳（右上角切换）。音乐是现场合成的：「小星星」是传统童谣旋律，另外两首是原创。',
+    sub: '跟着网上的视频跳，或者先学舞步再跟着音乐跳；骨架线变绿就是跳对了',
+    note: '跟着视频跳：视频来自B站，要联网，AI 一边看视频里的老师一边看你。跟跳可以两个人一起跳（右上角切换），音乐是现场合成的。',
     tiles: [
+      { id: 'videos', title: '跟着视频跳', desc: '广播体操、儿童舞、健身操，AI 看着老师给你打分', icon: 'video', screen: 'videos',
+        meta: function () { var n = videoCount(); return n ? '跳过 ' + n + ' 个视频' : VIDEO_TOTAL + ' 个视频'; } },
       { id: 'twinkle', title: '跟跳：小星星', desc: '入门，跟着童谣慢慢跳', pose: MOVES.star.keys[0].pose, go: { mode: 'dance', routine: 'twinkle' }, duo: true,
         meta: function () { var b = bestOther('dance-twinkle'); return b ? '最好 ' + b + ' 分' : '还没跳过'; } },
       { id: 'twinkle-learn', title: '教学：小星星', desc: '一个一个学舞步，摆像了才往下', pose: MOVES.sparkle.keys[0].pose, go: { mode: 'dance', routine: 'twinkle', learn: true }, meta: courseMeta('learn:twinkle') },
@@ -76,8 +88,7 @@ export var HUBS = {
       { id: 'beat-learn', title: '教学：动感节拍', desc: '16 个舞步，先学会再跳', pose: MOVES.pointL.keys[0].pose, go: { mode: 'dance', routine: 'beat', learn: true }, meta: courseMeta('learn:beat') },
       { id: 'kungfu', title: '跟跳：功夫小子', desc: '冲拳、上架、提膝，跳一支武术操', pose: MOVES.punchL.keys[0].pose, go: { mode: 'dance', routine: 'kungfu' }, duo: true,
         meta: function () { var b = bestOther('dance-kungfu'); return b ? '最好 ' + b + ' 分' : '还没跳过'; } },
-      { id: 'kungfu-learn', title: '教学：功夫小子', desc: '马步、抱拳礼、白鹤亮翅', pose: MOVES.crane.keys[0].pose, go: { mode: 'dance', routine: 'kungfu', learn: true }, meta: courseMeta('learn:kungfu') },
-      { id: 'mv', title: '我的舞蹈视频', desc: '导入自己存的舞蹈视频，跟着跳', icon: 'video', soon: true }
+      { id: 'kungfu-learn', title: '教学：功夫小子', desc: '马步、抱拳礼、白鹤亮翅', pose: MOVES.crane.keys[0].pose, go: { mode: 'dance', routine: 'kungfu', learn: true }, meta: courseMeta('learn:kungfu') }
     ]
   },
   train: {
@@ -148,6 +159,10 @@ function open(tile) {
   }
   if (tile.url) {
     openSite(tile);
+    return;
+  }
+  if (tile.screen) {
+    go(tile.screen, { from: current });
     return;
   }
   var p = {};

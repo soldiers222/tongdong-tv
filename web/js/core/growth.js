@@ -43,6 +43,7 @@ export var TASKS = {
   space: { text: '太空躲障碍躲开 12 次', go: { mode: 'dodge', variant: 'space', from: 'games' }, test: function (c) { return any(c.list, function (r) { return r.type === 'space' && (r.players === 2 || (r.dodged || 0) >= 12); }); } },
   dance: { text: '跟着音乐跳完一支舞', go: { mode: 'dance', routine: 'twinkle', from: 'dance' }, test: function (c) { return any(c.list, function (r) { return r.type === 'dance'; }); } },
   learn: { text: '学一支舞的舞步', go: { mode: 'dance', routine: 'beat', learn: true, from: 'dance' }, test: function (c) { return any(c.list, function (r) { return r.type === 'dancelearn'; }); } },
+  video: { text: '跟着视频跳满 2 分钟', go: { screen: 'videos' }, test: function (c) { return any(c.list, function (r) { return r.type === 'video' && (r.activeSec || 0) >= 120; }); } },
   balance: { text: '金鸡独立每条腿站够 10 秒', go: { mode: 'balance', from: 'train' }, test: function (c) {
     var l = false, r = false;
     for (var i = 0; i < c.list.length; i++) {
@@ -61,7 +62,7 @@ export var TASKS = {
   duo: { text: '和家人一起玩一局双人', go: { mode: 'fruit', from: 'games', players: 2 }, test: function (c) { return any(c.list, function (r) { return r.players === 2; }); } }
 };
 
-var PLAY_POOL = ['fruit', 'mole', 'dodge', 'space', 'dance', 'fruit', 'mole'];
+var PLAY_POOL = ['fruit', 'mole', 'dodge', 'space', 'dance', 'fruit', 'mole', 'video'];
 var BODY_POOL = ['balance', 'coord', 'yoga', 'wushu', 'squat', 'learn', 'star3', 'duo'];
 
 function hash(str) {
@@ -137,6 +138,15 @@ export var BADGES = [
   { id: 'wushu', mark: '武', name: '武术小侠', desc: '武术基本功拿到两颗星', test: function (st) { return prog(st, 'ex:wushu').stars >= 2; } },
   { id: 'dancer', mark: '舞', name: '小舞星', desc: '跟跳拿到两颗星', test: function (st) { return Math.max(prog(st, 'dance:twinkle').stars, prog(st, 'dance:beat').stars, prog(st, 'dance:kungfu').stars) >= 2; } },
   { id: 'dance3', mark: '曲', name: '三支舞', desc: '三支舞都跳过', test: function (st) { return prog(st, 'dance:twinkle').n > 0 && prog(st, 'dance:beat').n > 0 && prog(st, 'dance:kungfu').n > 0; } },
+  { id: 'video', mark: '视', name: '视频小舞星', desc: '跟着 3 个不同的视频跳过，至少一次拿到两颗星', test: function (st) {
+    var n = 0, two = false;
+    for (var k in st.progress) {
+      if (k.indexOf('video:') !== 0) continue;
+      n++;
+      if (st.progress[k].stars >= 2) two = true;
+    }
+    return n >= 3 && two;
+  } },
   { id: 'duo', mark: '伴', name: '好搭档', desc: '和家人玩一局双人', test: function (st) { return st.totals.duo >= 1; } }
 ];
 

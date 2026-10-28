@@ -210,7 +210,18 @@ function dodgeOne(t, i, cx) {
   return figure(o);
 }
 
+// 跟着视频跳：照着视频里老师的姿势做，慢 0.6 秒（看到了才跟着做）
+var videoHist = [];
+function videoOne(t) {
+  var h = hintFor(0);
+  videoHist.push({ t: t, pose: h && h.pose ? h.pose : {} });
+  while (videoHist.length > 1 && videoHist[1].t <= t - 600) videoHist.shift();
+  if (videoHist[0].t > t - 600) return figure({});
+  return figure(videoHist[0].pose);
+}
+
 MOCK_SCRIPTS.train = trainOne;
+MOCK_SCRIPTS.video = videoOne;
 MOCK_SCRIPTS.dance = function (t) { return danceOne(t, 0, null); };
 MOCK_SCRIPTS.dance2 = duo(danceOne);
 MOCK_SCRIPTS.mole = function (t) { return moleOne(t, 0, null); };

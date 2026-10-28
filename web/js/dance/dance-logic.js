@@ -60,15 +60,16 @@ export function weightsFor(tgt) {
   return w;
 }
 
-// kp：孩子的像素关键点（摄像头原始画面，未镜像）；tgt：targetPx() 的结果；weights：weightsFor(tgt)，可省略
-// 返回 {score 0–1, groups: {leftArm, rightArm, leftLeg, rightLeg}}；看到的关节太少返回 null
+// kp：孩子的像素关键点（摄像头原始画面，未镜像）；tgt：targetPx() 的结果（或视频里老师的像素关键点，
+// 看不清的关节不比）；weights：weightsFor(tgt)，可省略
+// 返回 {score 0–1, groups: {leftArm, rightArm, leftLeg, rightLeg}}；两边都看得到的关节太少返回 null
 export function similarity(kp, tgt, weights) {
-  if (!kp) return null;
+  if (!kp || !tgt) return null;
   var tot = 0, wsum = 0, base = 0, g = {}, gw = {};
   for (var i = 0; i < SEGS.length; i++) {
     var s = SEGS[i];
     var a = kp[s[0]], b = kp[s[1]];
-    if (!vis(a) || !vis(b)) continue;
+    if (!vis(a) || !vis(b) || !vis(tgt[s[0]]) || !vis(tgt[s[1]])) continue;
     var ang = angle(a, b, tgt[s[0]], tgt[s[1]]);
     // 差 12° 以内满分，差 60° 以上零分
     var sc = Math.max(0, Math.min(1, 1 - (ang - 12) / 48));

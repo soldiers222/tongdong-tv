@@ -5,7 +5,7 @@
 // workers 是同时开几个识别器（几帧一起算）。设备测试里逐个实测，选最合适的存起来，游戏开始时用。
 import * as store from '../core/store.js';
 
-var shown = null; // 当前预览参数 { el, fit, mirror }
+var shown = null; // 当前预览参数 { el, fit, mirror, sub }
 
 export function bridge() {
   var n = window.TongdongNative;
@@ -24,20 +24,28 @@ export function info() {
   try { return JSON.parse(n.poseInfo()); } catch (e) { return null; }
 }
 
-function send(el, fit, mirror) {
+function send(el, fit, mirror, sub) {
   var n = bridge();
   if (!n) return;
   var r = el.getBoundingClientRect();
-  n.preview(JSON.stringify({ show: true, x: r.left, y: r.top, w: r.width, h: r.height, fit: fit, mirror: !!mirror }));
+  var x = r.left, y = r.top, w = r.width, h = r.height;
+  if (sub) {
+    x += sub.x * r.width;
+    y += sub.y * r.height;
+    w = sub.w * r.width;
+    h = sub.h * r.height;
+  }
+  n.preview(JSON.stringify({ show: true, x: x, y: y, w: w, h: h, fit: fit, mirror: !!mirror }));
 }
 
-// 把摄像头画面放到 el 所在的位置（fit：cover 裁满 / contain 留边）
-export function previewOn(el, fit, mirror) {
+// 把摄像头画面放到 el 所在的位置（fit：cover 裁满 / contain 留边）。
+// sub：只放在 el 里的一块（{x, y, w, h} 占 el 的比例），比如跟着视频跳时右边那一小块
+export function previewOn(el, fit, mirror, sub) {
   if (!el || !bridge()) return;
-  shown = { el: el, fit: fit || 'cover', mirror: !!mirror };
+  shown = { el: el, fit: fit || 'cover', mirror: !!mirror, sub: sub || null };
   document.documentElement.classList.add('native-cam');
   document.body.classList.add('native-cam');
-  send(el, shown.fit, shown.mirror);
+  send(el, shown.fit, shown.mirror, shown.sub);
 }
 
 export function previewOff() {
@@ -194,7 +202,7 @@ export function cpuText(cpus) {
 
 // 画面缩放变化后重新对齐
 window.addEventListener('resize', function () {
-  if (shown) setTimeout(function () { if (shown) send(shown.el, shown.fit, shown.mirror); }, 50);
+  if (shown) setTimeout(function () { if (shown) send(shown.el, shown.fit, shown.mirror, shown.sub); }, 50);
 });
 
 // 在电视版 APK 里（有安卓接口）

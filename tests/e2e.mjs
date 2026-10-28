@@ -58,7 +58,7 @@ const browser = await puppeteer.launch({ executablePath: CHROME, headless: true,
 function nativeStub() {
   var timer = null;
   var t0 = 0;
-  var log = { starts: 0, stops: 0, previews: [], startOpts: [], configs: [], benches: [] };
+  var log = { starts: 0, stops: 0, previews: [], startOpts: [], configs: [], benches: [], videoOpens: [], videoCmds: [], videoCloses: 0, coachStarts: [], coachStops: 0 };
   var config = { accel: 'cpu', threads: 3, workers: 2 };
   var players = 1;
   window.__nativeLog = log;
@@ -68,7 +68,36 @@ function nativeStub() {
     var ms = c.accel === 'nnapi' ? 66 : 40 + 30 / c.threads;
     return { ok: true, accel: c.accel, threads: c.threads, workers: c.workers, fps: c.workers * 1000 / ms, p50: ms, p95: ms * 1.2, cpu: c.threads * c.workers * 0.9, model: 'movenet_lightning_int8.tflite' };
   }
+  // 视频层和老师识别：一段 24 秒的「视频」，老师的手每 1.2 秒换一个动作（左手举高、两手侧平举、右手举高、两手举高）；
+  // 视频放着时，摄像头里的孩子跟着老师做，慢 0.5 秒
+  var video = null, stateTimer = null, coachTimer = null;
+  function vnow() {
+    if (!video) return 0;
+    return Math.min(video.dur, video.t + (video.playing ? (performance.now() - video.at) / 1000 : 0));
+  }
+  function body(t, cx, cy, S, w, h) {
+    var ph = Math.floor(Math.max(0, t) / 1.2) % 4;
+    var up = function (side) { return [[side * 0.6, -1.8], [side * 0.65, -2.4]]; };
+    var out = function (side) { return [[side * 1.1, -1.2], [side * 1.7, -1.2]]; };
+    var down = function (side) { return [[side * 0.6, -0.6], [side * 0.65, -0.05]]; };
+    var L = ph === 0 || ph === 3 ? up(1) : (ph === 1 ? out(1) : down(1));
+    var R = ph === 2 || ph === 3 ? up(-1) : (ph === 1 ? out(-1) : down(-1));
+    var u = [[0, -1.6], [0.1, -1.7], [-0.1, -1.7], [0.25, -1.65], [-0.25, -1.65], [0.5, -1.2], [-0.5, -1.2],
+      L[0], R[0], L[1], R[1], [0.35, 0], [-0.35, 0], [0.35, 1], [-0.35, 1], [0.35, 2], [-0.35, 2]];
+    var k = [];
+    for (var i = 0; i < 17; i++) k.push((cx + u[i][0] * S) / w, (cy + u[i][1] * S) / h, 0.85);
+    return k;
+  }
+  function videoState() {
+    if (!video) return;
+    var t = vnow();
+    if (video.playing && t >= video.dur) { video.t = video.dur; video.playing = false; video.ended = true; }
+    var ready = performance.now() - video.openedAt > 900;
+    if (window.__tdVideo) window.__tdVideo(JSON.stringify({ ok: true, t: t, dur: video.dur, paused: !video.playing, ended: !!video.ended, ready: ready ? 4 : 0, vw: 1280, vh: 720, rect: [0, 0, 880, 495], W: 880, H: 495, mirror: video.mirror, push: false, taint: false, pushed: 0 }));
+  }
+
   function pose(t) {
+    if (video && video.playing) return body(vnow() - 0.5, 320, 260, 70, 640, 480);
     var p = [
       [0.50, 0.20], [0.49, 0.19], [0.51, 0.19], [0.48, 0.20], [0.52, 0.20],
       [0.45, 0.30], [0.55, 0.30], [0.42, 0.42], [0.58, 0.40],
@@ -126,6 +155,42 @@ function nativeStub() {
       setTimeout(function () { if (window.__tdNativeBench) window.__tdNativeBench(benchResult(c)); }, c.ms || 300);
     },
     cameraSizes: function () { return '[]'; },
+    videoAvailable: function () { return true; },
+    videoOpen: function (json) {
+      log.videoOpens.push(JSON.parse(json));
+      video = { t: 0, dur: 24, playing: true, at: performance.now(), openedAt: performance.now(), mirror: false, ended: false };
+      clearInterval(stateTimer);
+      stateTimer = setInterval(videoState, 250);
+    },
+    videoLayout: function () {},
+    videoCmd: function (json) {
+      var c = JSON.parse(json);
+      log.videoCmds.push(c.c);
+      if (!video) return;
+      if (c.c === 'play' && !video.playing && !video.ended) { video.at = performance.now(); video.playing = true; }
+      else if (c.c === 'pause' && video.playing) { video.t = vnow(); video.playing = false; }
+      else if (c.c === 'seek') { video.t = Math.min(video.dur, c.v); video.at = performance.now(); video.ended = false; }
+      else if (c.c === 'mirror') video.mirror = !!c.v;
+    },
+    videoClose: function () { log.videoCloses++; video = null; clearInterval(stateTimer); clearInterval(coachTimer); },
+    videoState: function () { return '{}'; },
+    coachStart: function (json) {
+      log.coachStarts.push(JSON.parse(json));
+      clearInterval(coachTimer);
+      setTimeout(function () { if (window.__tdCoachEvent) window.__tdCoachEvent({ type: 'mode', mode: 'copy', target: 'video' }); }, 50);
+      coachTimer = setInterval(function () {
+        if (!video || !video.playing || !window.__tdCoachPose) return;
+        window.__tdCoachPose({ k: body(vnow(), 640, 400, 110, 1280, 720), w: 1280, h: 720, age: 30, ms: 15, vt: vnow(), src: 'copy', luma: 90 });
+      }, 125);
+      return JSON.stringify({ ok: true });
+    },
+    coachUpdate: function () {},
+    coachFrame: function () {},
+    coachStop: function () { log.coachStops++; clearInterval(coachTimer); },
+    coachInfo: function () { return JSON.stringify({ running: !!coachTimer, mode: 'copy', frames: 10 }); },
+    mediaDir: function () { return '/sdcard/Android/data/com.family.tongdong/files/Movies'; },
+    mediaPermission: function () { return false; },
+    mediaRequest: function () {},
     openBrowser: function (url, title) { (log.browser = log.browser || []).push({ url: url, title: title }); },
     saveText: function (name, text) {
       log.saved = { name: name, text: text };
@@ -142,12 +207,36 @@ function nativeStub() {
 
 const external = [];
 const pageErrors = [];
+// 电视版 APK 里网页访问 https://appassets.androidplatform.net/bili/…、/media/… 由安卓代答（视频信息、封面、电视里的视频）；
+// 测试里用假数据回答
+const APP_HOST = 'https://appassets.androidplatform.net/';
+const PNG1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+function appAnswer(u) {
+  const path = u.slice(APP_HOST.length);
+  const cors = { 'Access-Control-Allow-Origin': '*', 'Cross-Origin-Resource-Policy': 'cross-origin' };
+  if (path.startsWith('bili/view/')) {
+    const bv = path.slice(10);
+    const data = { bvid: bv, title: '测试视频 ' + bv, duration: 95, owner: '测试UP主', view: 23456, pages: [{ page: 1, part: '', duration: 95 }] };
+    return { status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(bv === 'BV1Su4y1V7rS' ? { code: -404, message: '啥都木有' } : { code: 0, data: data }) };
+  }
+  if (path.startsWith('bili/cover/')) return { status: 200, headers: cors, contentType: 'image/png', body: PNG1 };
+  if (path.startsWith('media/list')) return { status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({ dir: '/sdcard/Android/data/com.family.tongdong/files/Movies', permitted: false, list: [] }) };
+  return { status: 404, headers: cors, body: '' };
+}
+
 async function open(path, opts) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
-  if (opts && opts.nativeStub) await page.evaluateOnNewDocument(nativeStub);
+  if (opts && opts.nativeStub) {
+    await page.evaluateOnNewDocument(nativeStub);
+    await page.setRequestInterception(true);
+  }
   page.on('request', (req) => {
     const u = req.url();
+    if (opts && opts.nativeStub) {
+      if (u.startsWith(APP_HOST)) { req.respond(appAnswer(u)); return; }
+      req.continue();
+    }
     if (!u.startsWith(BASE) && !u.startsWith('data:') && !u.startsWith('blob:')) external.push(u);
   });
   page.on('pageerror', (e) => pageErrors.push(path + ' → ' + e.message));
@@ -574,6 +663,112 @@ try {
     await page.close();
   }
 
+  // 9b. 跟着视频跳：视频库（网页版：不联网查视频信息，B站视频要放的时候才打开）
+  {
+    const page = await open('/?screen=hub&hub=dance');
+    await waitFor(page, () => document.querySelector('#screen-hub.active'), 5000);
+    check('跟跳练舞：第一格是「跟着视频跳」', await page.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-tile') === 'videos'));
+    await page.keyboard.press('Enter');
+    check('视频库：打开', await waitFor(page, () => document.querySelector('#screen-videos.active'), 3000));
+    const info = await page.evaluate(() => ({ cats: document.querySelectorAll('#vl-cats .vl-cat').length, cards: document.querySelectorAll('#vl-grid .vcard').length, focus: document.activeElement && document.activeElement.className }));
+    check('视频库：五个类别，学校里的操 13 个视频，焦点在第一个', info.cats === 5 && info.cards === 13 && /vcard/.test(info.focus), JSON.stringify(info));
+    await sleep(500);
+    await shot(page, '20-video-lib');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('ArrowRight');
+    const n2 = await page.evaluate(() => ({ cat: document.activeElement.getAttribute('data-cat'), cards: document.querySelectorAll('#vl-grid .vcard').length }));
+    check('视频库：在类别之间移动就换列表', n2.cat === 'dance' && n2.cards === 22, JSON.stringify(n2));
+    for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
+    const sc = await page.evaluate(() => document.getElementById('vl-grid').scrollTop);
+    check('视频库：往下移，列表跟着滚', sc > 300, String(sc));
+    await page.keyboard.press('Enter');
+    check('视频库：确定键打开详情，焦点在「开始跳」', await waitFor(page, () => document.getElementById('vl-detail').classList.contains('show') && document.activeElement.textContent === '开始跳', 2000));
+    await shot(page, '21-video-detail');
+    await page.keyboard.press('Escape');
+    check('视频库：返回键关掉详情', await waitFor(page, () => !document.getElementById('vl-sheet').classList.contains('show') && !!document.querySelector('#screen-videos.active'), 2000));
+    // 隐藏一个视频，再显示出来
+    await page.keyboard.press('Enter');
+    await waitFor(page, () => document.getElementById('vl-detail').classList.contains('show'), 2000);
+    await page.evaluate(() => Array.from(document.querySelectorAll('#vl-detail .btn')).find((b) => b.textContent === '隐藏这个视频').click());
+    check('视频库：隐藏视频', await waitFor(page, () => Object.keys(window.TD.store.get().videos.hidden).length === 1 && document.querySelectorAll('#vl-grid .vcard:not(.more)').length === 21, 2000));
+    await page.evaluate(() => document.querySelector('#vl-grid .vcard.more').click());
+    check('视频库：列表最后可以显示隐藏的视频', await waitFor(page, () => document.querySelectorAll('#vl-grid .vcard.hidden-v').length === 1, 2000));
+    await page.evaluate(() => document.querySelector('#vl-grid .vcard.hidden-v').click());
+    await waitFor(page, () => document.getElementById('vl-detail').classList.contains('show'), 2000);
+    await page.evaluate(() => Array.from(document.querySelectorAll('#vl-detail .btn')).find((b) => b.textContent === '不再隐藏').click());
+    check('视频库：不再隐藏', await waitFor(page, () => Object.keys(window.TD.store.get().videos.hidden).length === 0, 2000));
+    // 添加视频：屏幕键盘
+    await page.evaluate(() => document.getElementById('vl-add').click());
+    await waitFor(page, () => document.getElementById('vl-addbox').classList.contains('show'), 2000);
+    check('添加视频：焦点在屏幕键盘上，添加按钮先是灰的', await page.evaluate(() => document.activeElement.classList.contains('vk') && document.getElementById('vl-add-ok').disabled));
+    await page.evaluate(() => { const inp = document.getElementById('vl-input'); inp.value = 'BV1xx411c7m'; inp.dispatchEvent(new Event('input')); });
+    await page.evaluate(() => Array.from(document.querySelectorAll('#vl-keys .vk')).find((b) => b.textContent === 'D').focus());
+    await page.keyboard.press('Enter');
+    const val = await page.evaluate(() => document.getElementById('vl-input').value);
+    check('添加视频：屏幕键盘输入', val === 'BV1xx411c7mD', val);
+    await shot(page, '22-video-add');
+    await page.evaluate(() => document.getElementById('vl-add-ok').click());
+    check('添加视频：加到「我添加的」', await waitFor(page, () => window.TD.store.get().videos.mine.length === 1 && document.querySelector('#vl-cats .vl-cat.on').getAttribute('data-cat') === 'mine', 3000));
+    check('添加视频：列表里有它和「添加视频」格子', await page.evaluate(() => document.querySelectorAll('#vl-grid .vcard').length === 2 && !!document.querySelector('#vl-grid [data-bv="BV1xx411c7mD"]')));
+    await page.evaluate(() => document.querySelector('#vl-grid [data-bv="BV1xx411c7mD"]').click());
+    await waitFor(page, () => document.getElementById('vl-detail').classList.contains('show'), 2000);
+    await page.evaluate(() => Array.from(document.querySelectorAll('#vl-detail .btn')).find((b) => b.textContent === '删除这个视频').click());
+    check('添加视频：可以删掉', await waitFor(page, () => window.TD.store.get().videos.mine.length === 0, 2000));
+    await page.keyboard.press('Escape');
+    check('视频库：返回键回跟跳练舞', await waitFor(page, () => document.querySelector('#screen-hub.active') && document.getElementById('screen-hub').getAttribute('data-hub') === 'dance', 3000));
+    await page.close();
+  }
+
+  // 9c. 跟着视频跳：演示视频（画出来的小人当老师；模拟的孩子慢 0.6 秒跟着做）
+  {
+    const page = await open('/?mock=video&screen=play&mode=video&demo=beat&dur=30&title=演示&from=videos');
+    check('跟着视频跳：站好、倒数后开始放', await waitFor(page, () => { const m = window.TD.play.mode(); return m && m.phase === 'play'; }, 15000));
+    await sleep(12000);
+    await shot(page, '23-video-play');
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 40000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('跟着视频跳：跟着老师跳得了高分，AI 算出慢了 0.6 秒', done && rec && rec.type === 'video' && rec.score >= 80 && rec.aiBlocks >= 5 && Math.abs(rec.lag - 0.6) <= 0.2, rec ? JSON.stringify({ score: rec.score, lag: rec.lag, ai: rec.aiBlocks, counts: rec.counts }) : '');
+    await sleep(500);
+    await shot(page, '24-video-result');
+    check('跟着视频跳：结算页是「回视频库」', await page.evaluate(() => document.getElementById('btn-home').textContent === '回视频库'));
+    await page.keyboard.press('Escape');
+    check('跟着视频跳：返回键回视频库', await waitFor(page, () => document.querySelector('#screen-videos.active'), 4000));
+    await page.close();
+  }
+
+  // 9d. 跟着视频跳：电视版（B站播放器在视频层，安卓识别视频里的老师）
+  {
+    const page = await open('/?screen=play&mode=video&bv=BV1iPH8zmEyB&title=七彩阳光&cat=school&from=videos', { nativeStub: true });
+    check('电视版视频：打开B站外链播放器', await waitFor(page, () => window.__nativeLog.videoOpens.length === 1, 10000));
+    const open0 = await page.evaluate(() => window.__nativeLog.videoOpens[0]);
+    check('电视版视频：播放器地址和位置', /^https:\/\/player\.bilibili\.com\/player\.html\?/.test(open0.url) && /bvid=BV1iPH8zmEyB/.test(open0.url) && /danmaku=0/.test(open0.url) && Math.abs(open0.x - 24) < 2 && Math.abs(open0.w - 1320) < 2, JSON.stringify(open0));
+    check('电视版视频：摄像头画面放在右边的小框里', await waitFor(page, () => window.__nativeLog.previews.some((p) => p.show && Math.abs(p.x - 1368) < 3 && Math.abs(p.w - 528) < 3), 8000), JSON.stringify(await page.evaluate(() => window.__nativeLog.previews.slice(-1))));
+    check('电视版视频：自动播放先停住，站好后再放', await waitFor(page, () => { const m = window.TD.play.mode(); return m && m.phase === 'play'; }, 20000) && (await page.evaluate(() => window.__nativeLog.videoCmds.indexOf('pause') >= 0 && window.__nativeLog.videoCmds.indexOf('play') >= 0)));
+    check('电视版视频：开始识别视频里的老师', (await page.evaluate(() => window.__nativeLog.coachStarts.length >= 1 && window.__nativeLog.coachStarts[0].target === 'video')));
+    await sleep(6000);
+    await shot(page, '25-video-native');
+    await page.keyboard.press('Escape');
+    await waitFor(page, () => document.getElementById('loading').classList.contains('show'), 3000);
+    const btns = await page.evaluate(() => Array.from(document.querySelectorAll('#loading-btns .btn')).map((b) => b.textContent));
+    check('电视版视频：暂停菜单里能镜像画面、提前结束', btns.indexOf('画面左右镜像') >= 0 && btns.indexOf('结束，看成绩') >= 0, btns.join('、'));
+    await page.evaluate(() => Array.from(document.querySelectorAll('#loading-btns .btn')).find((b) => b.textContent === '画面左右镜像').click());
+    check('电视版视频：镜像后接着放', await waitFor(page, () => window.__nativeLog.videoCmds.indexOf('mirror') >= 0 && !document.getElementById('loading').classList.contains('show'), 3000));
+    await page.keyboard.press('ArrowRight');
+    check('电视版视频：右键快进 10 秒', await page.evaluate(() => window.__nativeLog.videoCmds.indexOf('seek') >= 0));
+    const done = await waitFor(page, () => window.TD.play.debug().lastRec, 40000);
+    const rec = await page.evaluate(() => window.TD.play.debug().lastRec);
+    check('电视版视频：放完出结算，AI 看着老师打分', done && rec && rec.type === 'video' && rec.coach === 'copy' && rec.aiBlocks >= 3 && rec.score >= 60, rec ? JSON.stringify({ score: rec.score, coach: rec.coach, ai: rec.aiBlocks, move: rec.moveBlocks, lag: rec.lag, counts: rec.counts }) : '');
+    await shot(page, '26-video-native-result');
+    await page.keyboard.press('Escape');
+    check('电视版视频：回到视频库', await waitFor(page, () => document.querySelector('#screen-videos.active'), 4000));
+    check('电视版视频：离开后关掉视频层和老师识别', await page.evaluate(() => window.__nativeLog.videoCloses >= 1 && window.__nativeLog.coachStops >= 1));
+    check('电视版视频库：查到了视频的时长和 UP 主', await waitFor(page, () => { const c = document.querySelector('#vl-grid .vcard'); return c && c.querySelector('.vc-dur').textContent === '1:35' && /测试UP主/.test(c.querySelector('.vc-meta').textContent); }, 5000));
+    await page.evaluate(() => { const b = Array.from(document.querySelectorAll('#vl-cats .vl-cat')).find((x) => x.getAttribute('data-cat') === 'dance'); b.focus(); });
+    check('电视版视频库：B站上没了的视频标出来', await waitFor(page, () => { const c = document.querySelector('#vl-grid [data-bv="BV1Su4y1V7rS"]'); return c && c.classList.contains('gone'); }, 5000));
+    await shot(page, '27-video-lib-native');
+    await page.close();
+  }
+
   // 10. 遥控游戏：电视版用带光标的浏览器打开网站
   {
     const page = await open('/?screen=hub&hub=remote', { nativeStub: true });
@@ -596,7 +791,7 @@ try {
       planet: document.getElementById('planet-name').textContent,
       stars: window.TD.store.get().totals.stars
     }));
-    check('成长中心：勋章和课程进度', info.medals === 17 && info.got >= 2 && info.chips === 9, JSON.stringify(info));
+    check('成长中心：勋章和课程进度', info.medals === 18 && info.got >= 2 && info.chips === 9, JSON.stringify(info));
     check('成长中心：玩过之后星球有了星星', info.stars > 0 && /第 \d+ 级/.test(info.planet), JSON.stringify(info));
     await page.evaluate(() => document.querySelector('#medals .medal').focus());
     check('成长中心：选中勋章显示怎么得到', /：/.test(await page.evaluate(() => document.getElementById('medal-desc').textContent)));

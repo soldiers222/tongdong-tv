@@ -125,6 +125,50 @@
     <p class="hub-note" id="hub-note"></p>
   </section>
 
+  <section id="screen-videos" class="screen page vlib" aria-label="跟着视频跳">
+    <header class="page-head">
+      <div>
+        <h1 class="page-title">跟着视频跳</h1>
+        <p class="hub-sub">网上的广播体操、儿童舞、健身操。AI 一边看视频里的老师，一边看你，跳得像就给分。</p>
+      </div>
+      <div class="btn-row">
+        <button class="btn focusable" id="vl-add">添加视频</button>
+        <button class="btn focusable" data-back>返回</button>
+      </div>
+    </header>
+    <nav class="vl-cats" id="vl-cats"></nav>
+    <p class="vl-desc" id="vl-desc"></p>
+    <div class="vl-grid" id="vl-grid"></div>
+    <p class="hub-note" id="vl-note"></p>
+    <input type="file" id="vl-file" accept="video/*" hidden>
+    <div class="vl-sheet" id="vl-sheet">
+      <div class="vs-box" id="vl-detail">
+        <div class="vs-cover"></div>
+        <div class="vs-info">
+          <h2 class="vs-title"></h2>
+          <p class="vs-official"></p>
+          <p class="vs-meta"></p>
+          <p class="vs-note"></p>
+          <p class="vs-src"></p>
+        </div>
+        <div class="vs-parts"></div>
+        <div class="btn-row"></div>
+      </div>
+      <div class="vs-box vs-add" id="vl-addbox">
+        <h2>添加B站视频</h2>
+        <p class="vs-help">在B站找到想跟着跳的视频，网址里 BV 开头的 12 位就是 BV 号（大小写要一样）。用下面的键盘一个一个输，
+          也可以选中输入框用电视的输入法；电脑上可以 adb shell input text BV号。b23.tv 的分享短链接也行。</p>
+        <div class="vl-inrow"><input id="vl-input" class="focusable vl-input" type="text" maxlength="60" autocomplete="off" autocapitalize="off" spellcheck="false" value="BV1"><span id="vl-input-count"></span></div>
+        <div class="vl-keys" id="vl-keys"></div>
+        <p class="vl-add-msg" id="vl-add-msg"></p>
+        <div class="btn-row">
+          <button class="btn primary focusable" id="vl-add-ok">添加</button>
+          <button class="btn focusable" id="vl-add-cancel">取消</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="screen-growth" class="screen page" aria-label="成长中心">
     <header class="page-head">
       <h1 class="page-title">成长中心</h1>
@@ -182,6 +226,7 @@
 
   <section id="screen-play" class="screen" aria-label="运动">
     <canvas id="stage"></canvas>
+    <div class="vd-host" id="vd-host"></div>
     <div class="result" id="result"></div>
   </section>
 

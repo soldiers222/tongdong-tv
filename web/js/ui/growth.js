@@ -14,6 +14,13 @@ function launch(p) {
   for (var k in p) q[k] = p[k];
   if (q.players === 2) store.setSetting('players', 2);
   delete q.players;
+  // 有的任务是去某一页（比如视频库），不是直接开始玩
+  if (q.screen) {
+    var to = q.screen;
+    delete q.screen;
+    go(to, q);
+    return;
+  }
   q.from = 'growth';
   go('play', q);
 }

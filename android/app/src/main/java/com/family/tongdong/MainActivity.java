@@ -10,11 +10,13 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Matrix;
+import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.Log;
 import android.util.Size;
 import android.view.KeyEvent;
 import android.view.TextureView;
@@ -22,6 +24,7 @@ import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -55,19 +58,28 @@ import java.util.Map;
  * - 切到后台时通知网页（window.__tdPause）马上关摄像头，升降摄像头会缩回去。
  * - 原生识别（PoseEngine）：摄像头和 MoveNet 都在安卓里跑，关键点通过 window.__tdNativePose 交给网页；
  *   摄像头画面显示在网页下层的 TextureView 里，网页把对应区域做成透明。
+ * - 跟着网上的视频跳（VideoPanel + CoachEngine）：B站外链播放器放在网页下层的第二个 WebView 里，
+ *   视频里老师的动作也用 MoveNet 识别（window.__tdCoachPose），网页拿去和孩子的动作比。
+ *   视频标题、封面经 /bili/… 代取（BiliApi）；电视里存的视频经 /media/… 读取（LocalMedia）。
  */
 public class MainActivity extends Activity {
+    private static final String TAG = "Tongdong";
     private static final String HOST = "appassets.androidplatform.net";
     private static final String ASSET_PREFIX = "/assets/";
     private static final String HOME_URL = "https://" + HOST + "/assets/www/index.html";
     private static final String DEFAULT_WEB_URL = "https://soldiers222.github.io/tongdong-tv/";
     private static final int REQ_CAMERA = 7;
+    private static final int REQ_MEDIA = 8;
 
     private WebView web;
     private FrameLayout root;
     private TextureView preview;
     private volatile SurfaceTexture previewTexture;
     private PoseEngine pose;
+    private CoachEngine coach;
+    private VideoPanel videoPanel;
+    private BiliApi bili;
+    private LocalMedia media;
     private PermissionRequest pendingRequest;
     private long lastBackAt;
     private boolean stopped;
@@ -81,32 +93,10 @@ public class MainActivity extends Activity {
             // 调试版可以用电脑 Chrome 的 chrome://inspect 看网页日志
             WebView.setWebContentsDebuggingEnabled(true);
         }
+        bili = new BiliApi(this);
+        media = new LocalMedia(this);
 
-        web = new WebView(this);
-        // 透明：原生识别时摄像头画面在网页下层，网页把画面区域做成透明（其他页面都有自己的背景色）
-        web.setBackgroundColor(Color.TRANSPARENT);
-        WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setMediaPlaybackRequiresUserGesture(false);
-        s.setAllowFileAccess(false);
-        s.setAllowContentAccess(false);
-        // 页面自己把 1920×1080 的画布缩放到屏幕，WebView 不要再做任何缩放：
-        // 打开宽视口/总览模式时，电视会先把页面缩小、随后又恢复，画面就被放大裁掉了。
-        s.setUseWideViewPort(false);
-        s.setLoadWithOverviewMode(false);
-        s.setSupportZoom(false);
-        s.setBuiltInZoomControls(false);
-        s.setDisplayZoomControls(false);
-        s.setTextZoom(100); // 不跟随系统字号
-        web.setWebViewClient(new Client());
-        web.setWebChromeClient(new Chrome());
-        web.addJavascriptInterface(new NativeBridge(), "TongdongNative");
-        web.setVerticalScrollBarEnabled(false);
-        web.setHorizontalScrollBarEnabled(false);
-        web.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        web.setFocusable(true);
-        web.setFocusableInTouchMode(true);
+        web = createWeb();
         root = new FrameLayout(this);
         // 黑底：网页透明的地方（原生摄像头画面还没出来时）露出来的是黑色
         root.setBackgroundColor(Color.BLACK);
@@ -138,6 +128,126 @@ public class MainActivity extends Activity {
         hideSystemUi();
         web.requestFocus();
         web.loadUrl(startUrl());
+    }
+
+    private WebView createWeb() {
+        WebView w = new WebView(this);
+        // 透明：原生识别时摄像头画面在网页下层，网页把画面区域做成透明（其他页面都有自己的背景色）
+        w.setBackgroundColor(Color.TRANSPARENT);
+        WebSettings s = w.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        s.setAllowFileAccess(false);
+        s.setAllowContentAccess(false);
+        // 页面自己把 1920×1080 的画布缩放到屏幕，WebView 不要再做任何缩放：
+        // 打开宽视口/总览模式时，电视会先把页面缩小、随后又恢复，画面就被放大裁掉了。
+        s.setUseWideViewPort(false);
+        s.setLoadWithOverviewMode(false);
+        s.setSupportZoom(false);
+        s.setBuiltInZoomControls(false);
+        s.setDisplayZoomControls(false);
+        s.setTextZoom(100); // 不跟随系统字号
+        w.setWebViewClient(new Client());
+        w.setWebChromeClient(new Chrome());
+        w.addJavascriptInterface(new NativeBridge(), "TongdongNative");
+        w.setVerticalScrollBarEnabled(false);
+        w.setHorizontalScrollBarEnabled(false);
+        w.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        w.setFocusable(true);
+        w.setFocusableInTouchMode(true);
+        return w;
+    }
+
+    /**
+     * 网页内核崩了（多半是内存不够；视频层和主网页共用一个内核进程）：换一个新的 WebView 重新打开，
+     * 不让整个应用退出。摄像头、老师识别先停掉，网页重新进来时会再开。
+     */
+    private void recreateWeb() {
+        if (pose != null) pose.stop();
+        if (coach != null) coach.stop();
+        layoutPreview("{\"show\":false}");
+        WebView old = web;
+        web = createWeb();
+        if (old != null) {
+            root.removeView(old);
+            try {
+                old.destroy();
+            } catch (Throwable ignored) {
+                // 忽略
+            }
+        }
+        root.addView(web, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        if (videoPanel != null) videoPanel.keepBelow(web);
+        web.requestFocus();
+        web.loadUrl(startUrl());
+        Toast.makeText(this, "画面出了点问题，已经重新打开", Toast.LENGTH_LONG).show();
+    }
+
+    /** 在主网页里执行一段脚本（任意线程） */
+    private void js(final String code) {
+        runOnUiThread(() -> {
+            if (web != null) web.evaluateJavascript(code, null);
+        });
+    }
+
+    // ---------- 跟着视频跳：视频层 + 老师的动作识别 ----------
+
+    private CoachEngine coach() {
+        if (coach == null) {
+            coach = new CoachEngine(this, new CoachEngine.Listener() {
+                @Override
+                public void onCoachPose(String json) {
+                    js("window.__tdCoachPose&&window.__tdCoachPose(" + json + ")");
+                }
+
+                @Override
+                public void onCoachEvent(String json) {
+                    runOnUiThread(() -> {
+                        try {
+                            JSONObject o = new JSONObject(json);
+                            if ("mode".equals(o.optString("type")) && "video".equals(o.optString("target")) && videoPanel != null) {
+                                videoPanel.onCoachMode(o.optString("mode"));
+                            }
+                        } catch (Exception ignored) {
+                            // 忽略
+                        }
+                        if (web != null) web.evaluateJavascript("window.__tdCoachEvent&&window.__tdCoachEvent(" + json + ")", null);
+                    });
+                }
+            });
+        }
+        return coach;
+    }
+
+    private VideoPanel panel() {
+        if (videoPanel == null) {
+            videoPanel = new VideoPanel(this, root, coach(), new VideoPanel.Listener() {
+                @Override
+                public void onVideoState(String json) {
+                    // 播放器页面是别人的网页：状态当成字符串传过去，网页自己解析
+                    if (web != null) web.evaluateJavascript("window.__tdVideo&&window.__tdVideo(" + JSONObject.quote(json) + ")", null);
+                }
+
+                @Override
+                public void onVideoEvent(String json) {
+                    if (web != null) web.evaluateJavascript("window.__tdVideoEvent&&window.__tdVideoEvent(" + JSONObject.quote(json) + ")", null);
+                }
+            });
+        }
+        return videoPanel;
+    }
+
+    /** 主网页里 <video>（电视里存的视频）的位置：CSS 像素 → 窗口像素 */
+    private Rect mainRect(JSONObject o) {
+        if (web == null) return null;
+        float d = getResources().getDisplayMetrics().density;
+        int[] loc = new int[2];
+        web.getLocationInWindow(loc);
+        double x = o.optDouble("x", 0), y = o.optDouble("y", 0), w = o.optDouble("w", 0), h = o.optDouble("h", 0);
+        if (!(w > 2 && h > 2)) return null;
+        return new Rect((int) Math.round(loc[0] + x * d), (int) Math.round(loc[1] + y * d),
+                (int) Math.round(loc[0] + (x + w) * d), (int) Math.round(loc[1] + (y + h) * d));
     }
 
     // ---------- 原生识别：摄像头 + MoveNet ----------
@@ -261,6 +371,7 @@ public class MainActivity extends Activity {
         if (stopped) {
             stopped = false;
             web.onResume();
+            if (videoPanel != null) videoPanel.resume();
             web.evaluateJavascript("window.__tdResume && window.__tdResume()", null);
         }
     }
@@ -273,6 +384,8 @@ public class MainActivity extends Activity {
             web.evaluateJavascript("window.__tdPause && window.__tdPause()", null);
             web.onPause();
             if (pose != null) pose.stop();
+            if (coach != null) coach.stop();
+            if (videoPanel != null) videoPanel.pause();
         }
         super.onStop();
     }
@@ -283,6 +396,15 @@ public class MainActivity extends Activity {
             pose.close();
             pose = null;
         }
+        if (videoPanel != null) {
+            videoPanel.destroy();
+            videoPanel = null;
+        }
+        if (coach != null) {
+            coach.close();
+            coach = null;
+        }
+        if (bili != null) bili.shutdown();
         if (web != null) {
             web.destroy();
             web = null;
@@ -458,6 +580,12 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_MEDIA) {
+            askingPermission = false;
+            boolean ok = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            js("window.__tdMediaPermission&&window.__tdMediaPermission(" + ok + ")");
+            return;
+        }
         if (requestCode != REQ_CAMERA) return;
         askingPermission = false;
         boolean ok = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
@@ -655,10 +783,139 @@ public class MainActivity extends Activity {
                 o.put("cameraPermission", hasCamera());
                 o.put("nativePose", PoseEngine.available(MainActivity.this));
                 o.put("cpus", PoseEngine.cpuJson());
+                o.put("video", true);
+                o.put("coach", CoachEngine.available(MainActivity.this));
+                o.put("mediaPermission", media.permitted());
             } catch (Exception ignored) {
                 // 拿不到的字段就空着
             }
             return o.toString();
+        }
+
+        // ---------- 跟着视频跳 ----------
+
+        /** 有视频层（这个版本的外壳支持跟着B站视频跳） */
+        @JavascriptInterface
+        public boolean videoAvailable() {
+            return true;
+        }
+
+        /** 打开B站外链播放器：{url, x, y, w, h}（CSS 像素）。状态从 window.__tdVideo 回来 */
+        @JavascriptInterface
+        public void videoOpen(String json) {
+            runOnUiThread(() -> panel().open(json));
+        }
+
+        @JavascriptInterface
+        public void videoLayout(String json) {
+            runOnUiThread(() -> {
+                if (videoPanel != null) videoPanel.layout(json);
+            });
+        }
+
+        /** {c: play|pause|seek|mirror|mute|unmute|rate, v} */
+        @JavascriptInterface
+        public void videoCmd(String json) {
+            runOnUiThread(() -> {
+                if (videoPanel != null) videoPanel.cmd(json);
+            });
+        }
+
+        @JavascriptInterface
+        public void videoClose() {
+            runOnUiThread(() -> {
+                if (videoPanel != null) videoPanel.close();
+            });
+        }
+
+        @JavascriptInterface
+        public String videoState() {
+            VideoPanel p = videoPanel;
+            return p == null ? "{}" : p.state();
+        }
+
+        /**
+         * 开始识别视频里的老师：{target: video（视频层）| main（网页里的 video 标签）, mode: copy|push, fps, threads}。
+         * 关键点从 window.__tdCoachPose 回来，换方式、出错从 window.__tdCoachEvent 回来
+         */
+        @JavascriptInterface
+        public String coachStart(String json) {
+            JSONObject o;
+            try {
+                o = new JSONObject(json == null ? "{}" : json);
+            } catch (Exception e) {
+                o = new JSONObject();
+            }
+            if ("main".equals(o.optString("target"))) {
+                String err = coach().start(o.toString());
+                return result(err == null, err);
+            }
+            final String opts = o.toString();
+            runOnUiThread(() -> {
+                String err = panel().coachStart(opts);
+                if (err != null) js("window.__tdCoachEvent&&window.__tdCoachEvent(" + result(false, err) + ")");
+            });
+            return result(true, null);
+        }
+
+        /** 网页里的 video 标签（target = main）：位置（CSS 像素）、在不在放、放到第几秒 */
+        @JavascriptInterface
+        public void coachUpdate(String json) {
+            CoachEngine c = coach;
+            if (c == null || !"main".equals(c.target())) return;
+            try {
+                JSONObject o = new JSONObject(json);
+                c.setVideo(mainRect(o), o.optBoolean("playing"), o.optDouble("t", -1));
+            } catch (Exception ignored) {
+                // 参数不对就不动
+            }
+        }
+
+        /** 网页送来一帧视频画面（截屏截不到时）：data:image/jpeg;base64,… */
+        @JavascriptInterface
+        public void coachFrame(String dataUrl, double vt, double wall) {
+            CoachEngine c = coach;
+            if (c != null) c.pushFrame(dataUrl, vt, wall);
+        }
+
+        @JavascriptInterface
+        public void coachStop() {
+            runOnUiThread(() -> {
+                if (videoPanel != null) videoPanel.coachStop();
+                if (coach != null) coach.stop();
+            });
+        }
+
+        @JavascriptInterface
+        public String coachInfo() {
+            return coach().infoJson();
+        }
+
+        // ---------- 电视里存的视频 ----------
+
+        @JavascriptInterface
+        public boolean mediaPermission() {
+            return media.permitted();
+        }
+
+        /** 弹系统的「读取视频」权限框，结果从 window.__tdMediaPermission(true|false) 回来 */
+        @JavascriptInterface
+        public void mediaRequest() {
+            runOnUiThread(() -> {
+                if (media.permitted()) {
+                    js("window.__tdMediaPermission&&window.__tdMediaPermission(true)");
+                    return;
+                }
+                askingPermission = true;
+                requestPermissions(new String[]{LocalMedia.permissionName()}, REQ_MEDIA);
+            });
+        }
+
+        /** 应用自己的视频文件夹（电脑上 adb push 到这里） */
+        @JavascriptInterface
+        public String mediaDir() {
+            File d = media.dir();
+            return d == null ? "" : d.getAbsolutePath();
         }
     }
 
@@ -667,7 +924,17 @@ public class MainActivity extends Activity {
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
             Uri u = request.getUrl();
             if (!HOST.equals(u.getHost())) return null;
-            return serveAsset(u.getPath());
+            String path = u.getPath();
+            if (path != null && path.startsWith("/bili/")) return bili.handle(path);
+            if (path != null && path.startsWith("/media/")) return media.handle(request);
+            return serveAsset(path);
+        }
+
+        @Override
+        public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            Log.w(TAG, "网页内核没了，重新打开");
+            if (view == web && root != null) root.post(MainActivity.this::recreateWeb);
+            return true;
         }
 
         @Override

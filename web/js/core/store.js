@@ -24,6 +24,8 @@ var DEFAULTS = {
   totals: { sessions: 0, stars: 0, sec: 0, duo: 0 },
   progress: {},        // 课程和玩法进度：{键: {n 次数, stars 最好星级, at}}
   growth: { tasks: {}, badges: {}, perfectDays: 0, perfectDay: null, bestStreak: 0, level: 1 },
+  // 跟着视频跳：家长添加的视频、隐藏的视频、画面要不要镜像
+  videos: { mine: [], hidden: {}, mirror: false },
   days: {},
   sessions: [],
   day0: null
@@ -105,6 +107,7 @@ function progressKey(rec) {
   if (rec.type === 'exercise') return 'ex:' + rec.course;
   if (rec.type === 'dance') return 'dance:' + rec.routine + (rec.players === 2 ? ':2' : '');
   if (rec.type === 'dancelearn') return 'learn:' + rec.routine;
+  if (rec.type === 'video') return 'video:' + rec.video;
   return rec.type + (rec.players === 2 ? ':2' : '');
 }
 

@@ -17,6 +17,7 @@ export function Stage(canvas, opts) {
   this.vh = H;
   this.mirror = true;
   this.fit = 'cover';
+  this.view = null;    // 摄像头画面只铺在画布的这一块（{x, y, w, h}，逻辑坐标），null = 整个画布
   this.setResolution(1);
   this._layout();
 }
@@ -41,15 +42,28 @@ Stage.prototype.setFit = function (fit) {
   this._layout();
 };
 
+// 摄像头画面只放在画布的一块里（跟着视频跳：左边是视频，右边一小块是孩子自己）；null 恢复成整个画布
+Stage.prototype.setViewport = function (r) {
+  this.view = r ? { x: r.x, y: r.y, w: r.w, h: r.h } : null;
+  this._layout();
+};
+
+// 摄像头画面所在的那块占画布的比例（给原生预览层定位用），整个画布时返回 null
+Stage.prototype.viewFrac = function () {
+  var v = this.view;
+  return v ? { x: v.x / W, y: v.y / H, w: v.w / W, h: v.h / H } : null;
+};
+
 Stage.prototype._layout = function () {
+  var v = this.view || { x: 0, y: 0, w: W, h: H };
   var s = this.fit === 'cover'
-    ? Math.max(W / this.vw, H / this.vh)
-    : Math.min(W / this.vw, H / this.vh);
+    ? Math.max(v.w / this.vw, v.h / this.vh)
+    : Math.min(v.w / this.vw, v.h / this.vh);
   this.scale = s;
   this.dw = this.vw * s;
   this.dh = this.vh * s;
-  this.ox = (W - this.dw) / 2;
-  this.oy = (H - this.dh) / 2;
+  this.ox = v.x + (v.w - this.dw) / 2;
+  this.oy = v.y + (v.h - this.dh) / 2;
 };
 
 // 归一化画面坐标 → 画布坐标
@@ -72,16 +86,18 @@ Stage.prototype.mapKp = function (kp) {
 
 Stage.prototype.drawVideo = function (video, dim) {
   var c = this.ctx;
+  var v = this.view || { x: 0, y: 0, w: W, h: H };
   if (this.transparentVideo) {
     // 画面区域留透明给下层的原生预览；留边（contain 时的黑边）照常涂底色
     c.fillStyle = '#0B1426';
     c.fillRect(0, 0, W, H);
-    var x0 = Math.max(0, Math.ceil(this.ox)), y0 = Math.max(0, Math.ceil(this.oy));
-    var x1 = Math.min(W, Math.floor(this.ox + this.dw)), y1 = Math.min(H, Math.floor(this.oy + this.dh));
+    var x0 = Math.max(v.x, Math.ceil(this.ox)), y0 = Math.max(v.y, Math.ceil(this.oy));
+    var x1 = Math.min(v.x + v.w, Math.floor(this.ox + this.dw)), y1 = Math.min(v.y + v.h, Math.floor(this.oy + this.dh));
     c.clearRect(x0, y0, x1 - x0, y1 - y0);
     if (dim) {
       c.fillStyle = 'rgba(8, 14, 28, ' + dim + ')';
-      c.fillRect(0, 0, W, H);
+      if (this.view) c.fillRect(x0, y0, x1 - x0, y1 - y0);
+      else c.fillRect(0, 0, W, H);
     }
     return;
   }
@@ -89,8 +105,14 @@ Stage.prototype.drawVideo = function (video, dim) {
   c.fillRect(0, 0, W, H);
   if (video && video.videoWidth) {
     c.save();
+    if (this.view) {
+      c.beginPath();
+      c.rect(v.x, v.y, v.w, v.h);
+      c.clip();
+    }
     if (this.mirror) {
-      c.translate(W, 0);
+      // 镜像：以这一块的中线翻过来
+      c.translate(2 * v.x + v.w, 0);
       c.scale(-1, 1);
     }
     c.drawImage(video, this.ox, this.oy, this.dw, this.dh);
@@ -98,7 +120,7 @@ Stage.prototype.drawVideo = function (video, dim) {
   }
   if (dim) {
     c.fillStyle = 'rgba(8, 14, 28, ' + dim + ')';
-    c.fillRect(0, 0, W, H);
+    c.fillRect(v.x, v.y, v.w, v.h);
   }
 };
 

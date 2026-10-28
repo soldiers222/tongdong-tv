@@ -15,6 +15,7 @@ import { ExerciseMode } from '../training/exercise.js';
 import { MoleMode } from '../games/mole.js';
 import { DodgeMode } from '../games/dodge.js';
 import { DanceMode } from '../dance/dance.js';
+import { VideoDanceMode } from '../video/video-mode.js';
 import { ratingOf, afterSession } from '../core/growth.js';
 import { now, keepLast } from '../core/util.js';
 import { cancel as cancelVoice } from '../core/voice.js';
@@ -44,7 +45,8 @@ var MODES = {
   exercise: { fit: 'contain', duo: false, make: function (env, p) { return new ExerciseMode(env, p.course); } },
   mole: { fit: 'cover', duo: true, make: function (env, p, n) { return new MoleMode(env, n); } },
   dodge: { fit: 'cover', duo: true, make: function (env, p, n) { return new DodgeMode(env, p.variant, n); } },
-  dance: { fit: 'contain', duo: true, make: function (env, p, n) { return new DanceMode(env, p.routine, p.learn, n); } }
+  dance: { fit: 'contain', duo: true, make: function (env, p, n) { return new DanceMode(env, p.routine, p.learn, n); } },
+  video: { fit: 'cover', duo: false, make: function (env, p) { return new VideoDanceMode(env, p); } }
 };
 
 export function supportsDuo(p) {
@@ -100,8 +102,19 @@ var env = {
     if (activeMs >= 5000) flushActive();
   },
   finish: function (rec) { onFinish(rec); },
-  onHandsUp: function () { if (showingResult) replay(); }
+  onHandsUp: function () { if (showingResult) replay(); },
+  leave: function () { goBack(); },
+  // 休息提醒之类的弹层关掉以后：遥控器按键还给运动页
+  focus: function () { playKeys(); setScope($('screen-play')); }
 };
+
+// 运动中遥控器的按键先给玩法自己用（比如跟着视频跳的快进快退）
+function playKeys() {
+  setInterceptor(function (name) {
+    if (!running || paused || showingResult || !mode || !mode.onKey) return false;
+    return mode.onKey(name) === true;
+  });
+}
 
 function loop(t) {
   if (!running) return;
@@ -136,7 +149,8 @@ function stopAll() {
   flushActive();
   if (mode && mode.dispose) mode.dispose();
   mode = null;
-  $('result').classList.remove('show');
+  if (stage) stage.setViewport(null);
+  $('result').className = 'result';
   cancelVoice();
   setInterceptor(null);
 }
@@ -240,7 +254,7 @@ async function start(p) {
 
   ui.hideLoading();
   if (notice) ui.toast(notice, 4500);
-  if (usedNative) native.previewOn($('stage'), stage.fit, stage.mirror);
+  if (usedNative) native.previewOn($('stage'), stage.fit, stage.mirror, stage.viewFrac());
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   setScope($('screen-play'));
   unsub = feed.on(function (p) { if (mode && !paused) mode.onPose(p); });
@@ -248,6 +262,7 @@ async function start(p) {
   running = true;
   lastT = 0;
   mode.begin();
+  playKeys();
   rafId = requestAnimationFrame(loop);
 }
 
@@ -256,6 +271,8 @@ function pause() {
   paused = true;
   if (mode.pause) mode.pause(true);
   var btns = [{ label: '继续', primary: true, fn: resume }];
+  // 玩法自己的按钮（跟着视频跳：镜像画面、提前结束）
+  if (mode.menuButtons) btns = btns.concat(mode.menuButtons(resume));
   // 训练和舞蹈教学：可以跳过做不来的动作
   if (mode.skip && mode.canSkip && mode.canSkip()) {
     btns.push({ label: '跳过这个动作', fn: function () { resume(); mode.skip(); } });
@@ -266,9 +283,14 @@ function pause() {
 }
 
 // 从哪个入口进来的，就回哪个入口
-function backLabel() { return params.from === 'growth' ? '回成长中心' : (params.from ? '回上一页' : '回首页'); }
+function backLabel() {
+  if (params.from === 'growth') return '回成长中心';
+  if (params.from === 'videos') return '回视频库';
+  return params.from ? '回上一页' : '回首页';
+}
 function backTarget() {
   if (params.from === 'growth') return ['growth', {}];
+  if (params.from === 'videos') return ['videos', { cat: params.cat || null }];
   if (params.from) return ['hub', { id: params.from }];
   return null;
 }
@@ -284,13 +306,14 @@ function resume() {
   if (mode.pause) mode.pause(false);
   ui.hideLoading();
   setScope($('screen-play'));
+  playKeys();
   lastT = 0;
 }
 
 function replay() {
   if (!mode) return;
   showingResult = false;
-  $('result').classList.remove('show');
+  $('result').className = 'result';
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   setScope($('screen-play'));
   mode.restart();
@@ -353,6 +376,7 @@ function onFinish(rec) {
   }
   $('btn-again').addEventListener('click', replay);
   $('btn-home').addEventListener('click', goBack);
+  box.className = 'result' + (mode.resultClass ? ' ' + mode.resultClass : '');
   box.classList.add('show');
   showingResult = true;
   if (mode.afterResult) mode.afterResult(box, rec);

@@ -39,8 +39,20 @@ export function describe(r) {
       var rl = ROUTINES[r.routine];
       return ['舞蹈教学：' + (rl ? rl.name : ''), '摆像 ' + r.ok + ' / ' + r.total + ' 个动作'];
     }
+    case 'video':
+      return ['跟着视频跳：' + (r.title || ''), r.score + ' 分 ' + stars(r.rating) + (r.activeSec ? '，跳了 ' + Math.max(1, Math.round(r.activeSec / 60)) + ' 分钟' : '')];
     default: return [r.type, ''];
   }
+}
+
+function bestVideo(o) {
+  var b = 0, n = 0;
+  for (var k in o) {
+    if (k.indexOf('video-') !== 0) continue;
+    n++;
+    b = Math.max(b, o[k]);
+  }
+  return n ? b + ' 分（跳过 ' + n + ' 个视频）' : '还没跳过';
 }
 
 export var recordsScreen = {
@@ -71,7 +83,8 @@ export var recordsScreen = {
       ['敏捷摸球', Math.max(o['mole-6-8'] || 0, o['mole-9-12'] || 0) + ' 分'],
       ['左右闪避', Math.max(o['dodge-6-8'] || 0, o['dodge-9-12'] || 0) + ' 分'],
       ['太空躲障碍', Math.max(o['space-6-8'] || 0, o['space-9-12'] || 0) + ' 分'],
-      ['跟跳最高', Math.max(o['dance-twinkle'] || 0, o['dance-beat'] || 0, o['dance-kungfu'] || 0) + ' 分']
+      ['跟跳最高', Math.max(o['dance-twinkle'] || 0, o['dance-beat'] || 0, o['dance-kungfu'] || 0) + ' 分'],
+      ['跟着视频跳最高', bestVideo(o)]
     ];
     var out = '';
     for (var m = 0; m < rows.length; m++) out += '<li><span>' + rows[m][0] + '</span><b>' + rows[m][1] + '</b></li>';
