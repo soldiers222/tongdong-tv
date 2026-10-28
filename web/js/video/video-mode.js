@@ -402,10 +402,8 @@ VideoDanceMode.prototype._drawVideoArea = function (c, vs, tn) {
     c.fillStyle = '#000';
     c.fillRect(r.x, r.y, r.w, r.h);
   }
-  // 还在加载、卡住了：在视频上写一行字（视频没在放，不会被当成老师的画面）
-  var msg = null;
-  if (this.phase === 'load' && !vs.ready) msg = '视频加载中…';
-  else if (this.phase === 'play' && this.stallSince && tn - this.stallSince > 1500 && !this.paused) msg = '视频在缓冲，等一下…';
+  // 还在加载：在视频上写一行字（视频没在放，不会被截进老师的画面；放着的时候视频上什么都不画）
+  var msg = this.phase === 'load' && !vs.ready ? '视频加载中…' : null;
   if (msg) {
     c.fillStyle = 'rgba(10,18,36,0.75)';
     roundRect(c, r.x + r.w / 2 - 220, r.y + r.h / 2 - 46, 440, 92, 46);
@@ -563,7 +561,10 @@ VideoDanceMode.prototype._drawBar = function (c, vs, tn) {
   // 评级和提示
   var g = this.lastGrade;
   if (this.phase === 'play' || this.phase === 'result') {
-    if (g) {
+    var stalled = this.phase === 'play' && this.stallSince && tn - this.stallSince > 1500 && !this.paused;
+    if (stalled) {
+      outlinedText(c, '视频在缓冲，等一下…', x0 + 20, y + 122, 30, '#FFC928', 'left', BODY_FONT);
+    } else if (g) {
       outlinedText(c, g.grade.text + (g.grade.id === 'miss' ? '' : '！'), x0 + 20, y + 128, 52, g.grade.color, 'left');
       var tip = this.lastTip && tn - this.lastTip.at < 6000 ? this.lastTip.text : (g.kind === 'move' ? '看不清老师，按你动得多不多打分' : '');
       if (tip) outlinedText(c, tip, x0 + 190, y + 122, 30, '#F7F5EF', 'left', BODY_FONT);
