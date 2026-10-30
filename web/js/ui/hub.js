@@ -140,7 +140,7 @@ function setPlayers(n) {
   store.setSetting('players', n);
   renderPlayers();
   sfx.select();
-  ui.toast(n === 2 ? '双人：两个人一左一右站在电视前（标着「可双人」的才能两个人玩）' : '单人', 2600);
+  ui.toast(n === 2 ? '双人：两个人一左一右站在电视前，标着「可双人」的可以一起玩' : '单人：一个人站在电视前玩', 2600);
 }
 
 var bound = false;

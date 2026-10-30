@@ -9,7 +9,7 @@ import { HandsUp } from '../core/gestures.js';
 import { sfx } from '../core/sfx.js';
 import { speak } from '../core/voice.js';
 import { now, qs, fmtSec, clamp } from '../core/util.js';
-import { DUO, HALF, screenPlayers, winnerOf, winnerText } from '../games/duo.js';
+import { DUO, HALF, screenPlayers, winnerOf, winnerText, shownTenths } from '../games/duo.js';
 
 var INTRO_MS = 2600;
 var BETWEEN_MS = 3600;
@@ -115,7 +115,7 @@ BalanceDuoMode.prototype._playerDone = function (P) {
   if (a.results.length > this.legIdx && b.results.length > this.legIdx) {
     // 两个人这一轮都结束了
     var ra = a.results[this.legIdx], rb = b.results[this.legIdx];
-    var w = winnerOf(ra.holdMs, rb.holdMs);
+    var w = winnerOf(shownTenths(ra.holdMs), shownTenths(rb.holdMs));
     speak(w === 'tie' ? '这一轮两个人一样久' : '这一轮' + (w === 'left' ? '左边' : '右边') + '站得久');
     this.phase = 'between';
     this.phaseStart = now();
@@ -318,7 +318,7 @@ BalanceDuoMode.prototype.frame = function (t, dt) {
     outlinedText(c, '第 ' + (this.legIdx + 1) + ' 轮：' + sideName(stand) + '脚站 · 目标 ' + Math.round(this.targetMs / 1000) + ' 秒', W / 2, 708, 26, '#F7F5EF', 'center', BODY_FONT);
   } else if (this.phase === 'between') {
     var ra = this.p[0].results[this.legIdx], rb = this.p[1].results[this.legIdx];
-    var w = winnerOf(ra.holdMs, rb.holdMs);
+    var w = winnerOf(shownTenths(ra.holdMs), shownTenths(rb.holdMs));
     this._wideBanner(w === 'tie' ? '这一轮一样久' : '这一轮' + (w === 'left' ? '左边' : '右边') + '站得久', '#FFC928');
     for (var q = 0; q < 2; q++) {
       var R = this.p[q].results[this.legIdx];
@@ -353,9 +353,10 @@ BalanceDuoMode.prototype.frame = function (t, dt) {
   if (this.env.settings.perf) outlinedText(c, this.env.perfText(), 20, 708, 22, '#F7F5EF', 'left', BODY_FONT);
 };
 
+// 总时间 = 两轮显示出来的秒数加起来（和结算页上每轮的数对得上），比输赢也按这个比
 function total(results) {
   var s = 0;
-  for (var i = 0; i < results.length; i++) s += results[i].holdMs;
+  for (var i = 0; i < results.length; i++) s += shownTenths(results[i].holdMs) * 100;
   return s;
 }
 

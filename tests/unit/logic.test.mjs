@@ -10,7 +10,7 @@ import { toPixels, handTip, countVisible } from '../../web/js/core/keypoints.js'
 import { skeleton, MOCK_SCRIPTS } from '../../web/js/pose/mock.js';
 import { FruitWorld } from '../../web/js/games/fruit-logic.js';
 import { BalanceJudge } from '../../web/js/training/balance-logic.js';
-import { percentile, rng } from '../../web/js/core/util.js';
+import { percentile, rng, fmtSec } from '../../web/js/core/util.js';
 
 const FW = 1280, FH = 720;
 
@@ -235,7 +235,7 @@ test('金鸡独立：身体大幅歪出去判失稳', () => {
 });
 
 // ---------- 双人 ----------
-import { screenPlayers, winnerOf, DUO } from '../../web/js/games/duo.js';
+import { screenPlayers, winnerOf, shownTenths, DUO } from '../../web/js/games/duo.js';
 
 test('双人：站位按半边检查，各自提示往哪边走', () => {
   const [l, r] = MOCK_SCRIPTS.still2(0); // 摄像头画面左半边、右半边的人
@@ -260,6 +260,17 @@ test('双人：识别结果按屏幕左右分给两个人', () => {
   assert.equal(winnerOf(3, 2), 'left');
   assert.equal(winnerOf(2, 3), 'right');
   assert.equal(winnerOf(2, 2), 'tie');
+});
+
+test('双人计时：按屏幕上显示的 0.1 秒比输赢，显示一样就是平局', () => {
+  assert.equal(shownTenths(8740), 87);
+  assert.equal(shownTenths(8760), 88);
+  assert.equal(shownTenths(-50), 0);
+  // 8.70 秒和 8.74 秒都显示 8.7：平局，不判一边赢
+  assert.equal(winnerOf(shownTenths(8700), shownTenths(8740)), 'tie');
+  assert.equal(winnerOf(shownTenths(8760), shownTenths(8700)), 'left');
+  // 和显示用的 fmtSec 在 .x5 这种边界上取整一致
+  for (const ms of [4850, 4950, 1250, 3350, 9999]) assert.equal(shownTenths(ms) / 10, Number(fmtSec(ms)));
 });
 
 test('双人：同一个随机种子两边出的水果一样', () => {

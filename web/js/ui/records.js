@@ -45,6 +45,7 @@ export function describe(r) {
   }
 }
 
+// 跟着视频跳的最好成绩：[分数, 跳过几个视频]（数量放在名字下面一行，不和大号分数挤在一行）
 function bestVideo(o) {
   var b = 0, n = 0;
   for (var k in o) {
@@ -52,8 +53,11 @@ function bestVideo(o) {
     n++;
     b = Math.max(b, o[k]);
   }
-  return n ? b + ' 分（跳过 ' + n + ' 个视频）' : '还没跳过';
+  return n ? [b + ' 分', '跳过 ' + n + ' 个视频'] : ['还没跳过', ''];
 }
+
+// 「最近的训练」一栏放得下的条数：再多就跑到屏幕外面了
+var RECENT_ROWS = 7;
 
 export var recordsScreen = {
   enter: function () {
@@ -69,7 +73,7 @@ export var recordsScreen = {
     $('rec-bars').innerHTML = html;
     var s = store.get();
     $('rec-total').textContent = '累计运动 ' + minutesText(s.totals.sec) + ' 分钟，一共 ' + s.totals.sessions + ' 局';
-    var recent = store.recentSessions(9);
+    var recent = store.recentSessions(RECENT_ROWS);
     var rh = '';
     for (var k = 0; k < recent.length; k++) {
       var ds = describe(recent[k]);
@@ -77,6 +81,7 @@ export var recordsScreen = {
     }
     $('rec-recent').innerHTML = rh || '<li class="empty-note">还没有训练记录。玩一局、练一次就会出现在这里。</li>';
     var b = s.best, o = b.other;
+    var bv = bestVideo(o);
     var rows = [
       ['西瓜切切切', Math.max(b.fruit['6-8'] || 0, b.fruit['9-12'] || 0) + ' 分'],
       ['金鸡独立', (b.balance.left || b.balance.right) ? '左 ' + fmtSec(b.balance.left || 0) + ' · 右 ' + fmtSec(b.balance.right || 0) + ' 秒' : '还没站过'],
@@ -84,10 +89,12 @@ export var recordsScreen = {
       ['左右闪避', Math.max(o['dodge-6-8'] || 0, o['dodge-9-12'] || 0) + ' 分'],
       ['太空躲障碍', Math.max(o['space-6-8'] || 0, o['space-9-12'] || 0) + ' 分'],
       ['跟跳最高', Math.max(o['dance-twinkle'] || 0, o['dance-beat'] || 0, o['dance-kungfu'] || 0) + ' 分'],
-      ['跟着视频跳最高', bestVideo(o)]
+      ['跟着视频跳最高', bv[0], bv[1]]
     ];
     var out = '';
-    for (var m = 0; m < rows.length; m++) out += '<li><span>' + rows[m][0] + '</span><b>' + rows[m][1] + '</b></li>';
+    for (var m = 0; m < rows.length; m++) {
+      out += '<li><span class="bk">' + rows[m][0] + (rows[m][2] ? '<small>' + rows[m][2] + '</small>' : '') + '</span><b>' + rows[m][1] + '</b></li>';
+    }
     $('rec-bests').innerHTML = out;
   },
   backTo: function () { return ['growth', {}]; }

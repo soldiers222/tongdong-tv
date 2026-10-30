@@ -206,7 +206,7 @@ function addCard() {
 function noteCard(title, text, btnLabel, fn) {
   var d = document.createElement('div');
   d.className = 'vl-empty';
-  d.innerHTML = '<h3>' + title + '</h3><p>' + text + '</p>';
+  d.innerHTML = '<h2>' + title + '</h2><p>' + text + '</p>';
   if (btnLabel) {
     var b = document.createElement('button');
     b.className = 'btn focusable';

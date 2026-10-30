@@ -215,7 +215,7 @@ export var growthScreen = {
     tasks.forEach(function (tk) {
       var li = document.createElement('li');
       li.className = tk.done ? 'done' : '';
-      li.innerHTML = '<span class="chk">' + (tk.done ? '✓' : '') + '</span><span class="tt">' + tk.text + '</span>';
+      li.innerHTML = '<span class="chk" aria-hidden="true"></span><span class="tt">' + tk.text + (tk.done ? '<span class="sr">（已完成）</span>' : '') + '</span>';
       if (tk.done) {
         var sp = document.createElement('span');
         sp.className = 'got';

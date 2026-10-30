@@ -1,5 +1,6 @@
 // 双人共用：屏幕左右各一个人。识别结果按屏幕左右分给两个人，名字、颜色、胜负说法。
 import { W } from '../core/stage.js';
+import { fmtSec } from '../core/util.js';
 
 export var HALF = W / 2;
 
@@ -21,6 +22,10 @@ export function winnerOf(a, b) {
   if (b > a) return 'right';
   return 'tie';
 }
+
+// 计时比赛按屏幕上显示的数比（fmtSec 保留一位小数，单位 0.1 秒）：两边显示一样就是平局，
+// 不会出现两边都显示 8.7 秒却判一边赢
+export function shownTenths(ms) { return Math.round(Number(fmtSec(ms)) * 10); }
 
 export function winnerText(w) {
   if (w === 'tie') return '平局！两个人一样厉害';

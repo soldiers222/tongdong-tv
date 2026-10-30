@@ -182,11 +182,11 @@ export var COURSE_LIST = [
   { key: 'ex:coord', name: '协调训练', go: { mode: 'exercise', course: 'coord', from: 'train' } },
   { key: 'ex:yoga', name: '瑜伽小课', go: { mode: 'exercise', course: 'yoga', from: 'train' } },
   { key: 'ex:wushu', name: '武术基本功', go: { mode: 'exercise', course: 'wushu', from: 'train' } },
-  { key: 'learn:twinkle', name: '舞蹈教学：小星星', go: { mode: 'dance', routine: 'twinkle', learn: true, from: 'dance' } },
+  { key: 'learn:twinkle', name: '教学：小星星', go: { mode: 'dance', routine: 'twinkle', learn: true, from: 'dance' } },
   { key: 'dance:twinkle', name: '跟跳：小星星', go: { mode: 'dance', routine: 'twinkle', from: 'dance' } },
-  { key: 'learn:beat', name: '舞蹈教学：动感节拍', go: { mode: 'dance', routine: 'beat', learn: true, from: 'dance' } },
+  { key: 'learn:beat', name: '教学：动感节拍', go: { mode: 'dance', routine: 'beat', learn: true, from: 'dance' } },
   { key: 'dance:beat', name: '跟跳：动感节拍', go: { mode: 'dance', routine: 'beat', from: 'dance' } },
-  { key: 'learn:kungfu', name: '舞蹈教学：功夫小子', go: { mode: 'dance', routine: 'kungfu', learn: true, from: 'dance' } },
+  { key: 'learn:kungfu', name: '教学：功夫小子', go: { mode: 'dance', routine: 'kungfu', learn: true, from: 'dance' } },
   { key: 'dance:kungfu', name: '跟跳：功夫小子', go: { mode: 'dance', routine: 'kungfu', from: 'dance' } }
 ];
 
